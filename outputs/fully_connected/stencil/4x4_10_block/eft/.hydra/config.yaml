@@ -1,0 +1,25 @@
+dag:
+  stencil:
+    width: 4
+    steps: 10
+    dimension: 2
+    boundary_scale: 1
+    data_scale: 1
+    initial_data_placement: block
+  type: stencil
+  params: ${dag.stencil.width}x${dag.stencil.width}_${dag.stencil.steps}_${dag.stencil.initial_data_placement}
+  script: stencil_driver.py
+system:
+  type: fully_connected
+  ngpus: 4
+  gpumem: 100000000000000
+  cpumem: 100000000000000
+  bandwidth: 1000
+  latency: 1
+mapper:
+  type: eft
+  python: false
+env:
+  task_noise: None
+  seed: 100
+  use_data: true

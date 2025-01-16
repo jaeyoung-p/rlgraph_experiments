@@ -1,0 +1,7 @@
+width: 4
+steps: 1000
+dimension: 2
+interior: 250000000
+boundary_scale: 1
+data_scale: 1
+initial_data_placement: block

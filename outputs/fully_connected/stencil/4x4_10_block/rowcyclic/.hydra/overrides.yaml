@@ -1,0 +1,2 @@
+- mapper=pattern/stencil/rowcyclic
+- dag.stencil.initial_data_placement=block

@@ -1,0 +1,2 @@
+- mapper=eft
+- dag.stencil.initial_data_placement=block

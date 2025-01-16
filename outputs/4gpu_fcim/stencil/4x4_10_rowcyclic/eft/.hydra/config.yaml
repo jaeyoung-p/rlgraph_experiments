@@ -1,0 +1,16 @@
+dag:
+  stencil:
+    width: 4
+    steps: 10
+    data_init: rowcyclic
+  type: stencil
+  params: ${dag.stencil.width}x${dag.stencil.width}_${dag.stencil.steps}_${dag.stencil.data_init}
+  script: stencil_driver.py
+system:
+  type: 4gpu_fcim
+  ngpus: 4
+  gpumem: 100000000000000
+  bandwidth: 1000
+  latency: 1
+mapper:
+  type: eft
