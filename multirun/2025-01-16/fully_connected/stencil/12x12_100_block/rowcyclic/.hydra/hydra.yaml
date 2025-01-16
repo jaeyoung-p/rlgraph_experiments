@@ -113,15 +113,15 @@ hydra:
     - hydra.mode=MULTIRUN
     task:
     - dag.stencil.width=12
-    - dag.stencil.steps=1000
-    - mapper=pattern/stencil/block,pattern/stencil/rowcyclic
-    - dag.stencil.boundary_scale=5,10,20,40
+    - dag.stencil.steps=100
+    - mapper=pattern/stencil/rowcyclic
+    - dag.stencil.boundary_scale=40
   job:
     name: driver
     chdir: null
-    override_dirname: dag.stencil.boundary_scale=5,10,20,40,dag.stencil.steps=1000,dag.stencil.width=12,mapper=pattern/stencil/block,pattern/stencil/rowcyclic
-    id: ???
-    num: ???
+    override_dirname: dag.stencil.boundary_scale=40,dag.stencil.steps=100,dag.stencil.width=12,mapper=pattern/stencil/rowcyclic
+    id: '7'
+    num: 7
     config_name: config
     env_set: {}
     env_copy: []
@@ -144,10 +144,10 @@ hydra:
     - path: ''
       schema: structured
       provider: schema
-    output_dir: ???
+    output_dir: /home/wlruys/syncthing/workspace/simulator_jacobi/rlgraph_experiments/multirun/2025-01-16/fully_connected/stencil/12x12_100_block/rowcyclic
     choices:
       env: nonoise
-      mapper: eft
+      mapper: pattern/stencil/rowcyclic
       system: fully_connected
       dag: stencil
       dag/stencil: default
@@ -161,29 +161,3 @@ hydra:
       hydra/launcher: basic
       hydra/output: default
   verbose: false
-dag:
-  stencil:
-    width: 12
-    steps: 1000
-    dimension: 2
-    interior_size: 25000000
-    boundary_scale: 5
-    data_scale: 10
-    initial_data_placement: block
-  type: stencil
-  params: ${dag.stencil.width}x${dag.stencil.width}_${dag.stencil.steps}_${dag.stencil.initial_data_placement}
-  script: stencil_driver.py
-system:
-  type: fully_connected
-  ngpus: 4
-  gpumem: 100000000000000
-  cpumem: 100000000000000
-  bandwidth: 10000
-  latency: 1
-mapper:
-  type: eft
-  python: false
-env:
-  task_noise: None
-  seed: 100
-  use_data: true

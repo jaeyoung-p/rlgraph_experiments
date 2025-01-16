@@ -1,0 +1,4 @@
+- dag.stencil.width=12
+- dag.stencil.steps=1000
+- mapper=pattern/stencil/block
+- dag.stencil.boundary_scale=40
