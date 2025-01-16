@@ -1,4 +1,3 @@
 - dag.stencil.width=10
 - dag.stencil.steps=1000
 - mapper=pattern/stencil/block
-- dag.stencil.initial_data_placement=block

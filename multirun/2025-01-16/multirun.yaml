@@ -115,11 +115,10 @@ hydra:
     - dag.stencil.width=10
     - dag.stencil.steps=1000
     - mapper=eft,pattern/stencil/block,pattern/stencil/rowcyclic
-    - dag.stencil.initial_data_placement=block
   job:
     name: driver
     chdir: null
-    override_dirname: dag.stencil.initial_data_placement=block,dag.stencil.steps=1000,dag.stencil.width=10,mapper=eft,pattern/stencil/block,pattern/stencil/rowcyclic
+    override_dirname: dag.stencil.steps=1000,dag.stencil.width=10,mapper=eft,pattern/stencil/block,pattern/stencil/rowcyclic
     id: ???
     num: ???
     config_name: config
@@ -166,8 +165,9 @@ dag:
     width: 10
     steps: 1000
     dimension: 2
-    boundary_scale: 1
-    data_scale: 1
+    interior_size: 25000000
+    boundary_scale: 5
+    data_scale: 10
     initial_data_placement: block
   type: stencil
   params: ${dag.stencil.width}x${dag.stencil.width}_${dag.stencil.steps}_${dag.stencil.initial_data_placement}
@@ -177,7 +177,7 @@ system:
   ngpus: 4
   gpumem: 100000000000000
   cpumem: 100000000000000
-  bandwidth: 1000
+  bandwidth: 10000
   latency: 1
 mapper:
   type: eft

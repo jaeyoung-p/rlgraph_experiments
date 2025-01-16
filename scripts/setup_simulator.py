@@ -48,7 +48,6 @@ def setup_simulator(cfg, tasks, data, devices):
     simulator = H.create_simulator()
     simulator.initialize(use_data=cfg.env.use_data)
     simulator.randomize_durations()
-
     simulator.randomize_priorities()
 
     if cfg.mapper.python is True:
