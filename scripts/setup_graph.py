@@ -20,6 +20,7 @@ from task4feedback.types import (
     Architecture,
 )
 from task4feedback.graphs import StencilDataGraphConfig, StencilConfig, make_graph
+from task4feedback.graphs import CholeskyDataGraphConfig, CholeskyConfig, make_graph
 from task4feedback.graphs.utilities import DataPlacer
 from task4feedback.simulator.utility import parse_size
 import numpy as np
@@ -116,8 +117,53 @@ def setup_stencil(cfg):
     return tasks, data
 
 
+def setup_cholesky_data(cfg):
+    data_config = CholeskyDataGraphConfig()
+    data_config.data_size = cfg.dag.cholesky.data_size
+
+    if cfg.dag.cholesky.initial_data_placement == "cpu":
+        data_config.initial_placement = lambda data_id: (Device(Architecture.CPU, -1),)
+    elif cfg.dag.cholesky.initial_data_placement == "rowcyclic":
+        raise NotImplementedError("rowcyclic not implemented")
+    else:
+        raise ValueError(
+            "Unknown initial data placement: {}".format(
+                cfg.dag.stencil.initial_data_placement
+            )
+        )
+
+    return data_config
+
+
+def setup_cholesky(cfg):
+
+    def task_config(task_id: TaskID) -> TaskPlacementInfo:
+        placement_info = TaskPlacementInfo()
+        placement_info.add(
+            (Device(Architecture.GPU, -1),),
+            TaskRuntimeInfo(task_time=1000, device_fraction=1),
+        )
+        placement_info.add(
+            (Device(Architecture.CPU, -1),),
+            TaskRuntimeInfo(task_time=1000, device_fraction=1),
+        )
+        return placement_info
+
+    data_config = setup_cholesky_data(cfg)
+
+    config = CholeskyConfig(
+        blocks=cfg.dag.cholesky.blocks,
+        task_config=task_config,
+    )
+    tasks, data = make_graph(config, data_config=data_config)
+
+    return tasks, data
+
+
 def setup_graph(cfg):
     if cfg.dag.type == "stencil":
         return setup_stencil(cfg)
+    elif cfg.dag.type == "cholesky":
+        return setup_cholesky(cfg)
     else:
         raise ValueError("Unknown dag type: {}".format(cfg.dag.type))

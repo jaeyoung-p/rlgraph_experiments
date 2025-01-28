@@ -2,4 +2,3 @@ defaults:
   - stencil: default
 type: stencil
 params: ${dag.stencil.width}x${dag.stencil.width}_${dag.stencil.steps}_${dag.stencil.initial_data_placement}
-script: stencil_driver.py

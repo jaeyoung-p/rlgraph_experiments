@@ -25,6 +25,7 @@ from task4feedback.simulator.utility import parse_size
 import os
 
 from aim import Run, Distribution, Figure
+from aim.ext.cleanup import AutoClean
 
 
 def run(cfg, simulator):
@@ -49,3 +50,5 @@ def run(cfg, simulator):
         f.write("Total time: " + str(final_time))
 
     print("Total time: ", final_time)
+
+    run.close()

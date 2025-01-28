@@ -32,6 +32,30 @@ def device_to_idx(device: Device) -> int:
         return device.device_id + 1
 
 
+class StaticPythonMapperInt:
+    def __init__(self, task_idx_to_device_id):
+        self.mapping = task_idx_to_device_id
+
+    def set_mapping(self, task_idx_to_device_id):
+        self.mapping = task_idx_to_device_id
+
+    def map_tasks(self, candidates: list[int], simulator) -> list[Action]:
+
+        action_list = []
+        for i, candidate in enumerate(candidates):
+            device = self.mapping(candidate)
+            action_list.append(
+                Action(
+                    candidate,
+                    i,
+                    device,
+                    0,
+                    0,
+                )
+            )
+        return action_list
+
+
 class StaticPythonMapper:
     def __init__(self, task_idx_to_device_id):
         self.mapping = task_idx_to_device_id
@@ -95,11 +119,20 @@ def stencil_block(cfg, tasks, data):
     return idx_to_device
 
 
+def serial(cfg, tasks, data):
+    def idx_to_device(task_idx: int) -> Device:
+        return cfg.mapper.device
+
+    return idx_to_device
+
+
 def setup_python_mapper(cfg, tasks, data):
     if cfg.mapper.type == "block":
         return StaticPythonMapper(stencil_block(cfg, tasks, data))
     elif cfg.mapper.type == "rowcyclic":
         return StaticPythonMapper(stencil_rowcyclic(cfg, tasks, data))
+    elif cfg.mapper.type == "serial":
+        return StaticPythonMapperInt(serial(cfg, tasks, data))
     elif cfg.mapper.type == "random":
         raise NotImplementedError("Random mapper not implemented")
     elif cfg.mapper.type == "round_robin":
