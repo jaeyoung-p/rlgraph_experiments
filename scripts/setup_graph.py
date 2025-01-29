@@ -44,11 +44,17 @@ def setup_stencil_data(cfg):
 
     boundary_size = compute_boundary_size()
 
-    print(f"Time to move interior data: {interior_size / cfg.system.bandwidth}")
-    print(f"Time to move boundary data: {boundary_size / cfg.system.bandwidth}")
+    print(
+        f"Time to move interior data: {interior_size / cfg.system.bandwidth}, Size: {interior_size}"
+    )
+    print(
+        f"Time to move boundary data: {boundary_size / cfg.system.bandwidth}, Size: {boundary_size}"
+    )
 
     def sizes(data_id: DataID) -> int:
         return boundary_size if data_id.idx[1] == 1 else interior_size
+
+    data_config.initial_sizes = sizes
 
     if cfg.dag.stencil.initial_data_placement == "cpu":
         data_config.initial_placement = lambda data_id: (Device(Architecture.CPU, -1),)
@@ -96,10 +102,6 @@ def setup_stencil(cfg):
         placement_info = TaskPlacementInfo()
         placement_info.add(
             (Device(Architecture.GPU, -1),),
-            TaskRuntimeInfo(task_time=1000, device_fraction=1),
-        )
-        placement_info.add(
-            (Device(Architecture.CPU, -1),),
             TaskRuntimeInfo(task_time=1000, device_fraction=1),
         )
         return placement_info
