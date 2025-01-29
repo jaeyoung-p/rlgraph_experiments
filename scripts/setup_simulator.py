@@ -36,7 +36,7 @@ def setup_task_noise(cfg):
 
 
 def setup_simulator(cfg, tasks, data, devices):
-    # start_logger()
+    start_logger()
     H = SimulatorHandler(
         tasks,
         data,
@@ -51,10 +51,12 @@ def setup_simulator(cfg, tasks, data, devices):
     simulator.randomize_priorities()
 
     if cfg.mapper.python is True:
+        print("Using Python mapper")
         python_mapper = setup_python_mapper(cfg, H.task_handle, data)
         simulator.set_python_mapper(python_mapper)
         simulator.enable_python_mapper()
     else:
+        print("Using C++ mapper")
         simulator.disable_python_mapper()
 
     return simulator
