@@ -32,17 +32,30 @@ def setup_stencil_data(cfg):
     data_config.dimensions = cfg.dag.stencil.dimension
     data_config.width = cfg.dag.stencil.width
 
-    interior_size = cfg.dag.stencil.interior_size * 4 * cfg.dag.stencil.data_scale
-
-    def compute_boundary_size():
-        return (
-            np.sqrt(interior_size)
-            * 4
-            * cfg.dag.stencil.boundary_scale
-            * cfg.dag.stencil.data_scale
+    if cfg.dag.stencil.interior_comm != "None":
+        print(cfg.dag.stencil.interior_comm)
+        interior_size = 1000 * (
+            int(cfg.dag.stencil.interior_comm) / cfg.system.bandwidth
         )
+    else:
+        interior_size = cfg.dag.stencil.interior_size * 4 * cfg.dag.stencil.data_scale
 
-    boundary_size = compute_boundary_size()
+    if cfg.dag.stencil.boundary_comm != "None":
+        print(cfg.dag.stencil.boundary_comm)
+        boundary_size = 1000 * (
+            int(cfg.dag.stencil.boundary_comm) / cfg.system.bandwidth
+        )
+    else:
+
+        def compute_boundary_size():
+            return (
+                np.sqrt(interior_size)
+                * 4
+                * cfg.dag.stencil.boundary_scale
+                * cfg.dag.stencil.data_scale
+            )
+
+        boundary_size = compute_boundary_size()
 
     print(
         f"Time to move interior data: {interior_size / cfg.system.bandwidth}, Size: {interior_size}"
