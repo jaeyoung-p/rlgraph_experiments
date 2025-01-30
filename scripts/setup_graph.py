@@ -57,7 +57,7 @@ def setup_stencil_data(cfg):
     data_config.initial_sizes = sizes
 
     if cfg.dag.stencil.initial_data_placement == "cpu":
-        data_config.initial_placement = lambda data_id: (Device(Architecture.CPU, -1),)
+        data_config.initial_placement = lambda data_id: (Device(Architecture.CPU, 0),)
     elif cfg.dag.stencil.initial_data_placement == "rowcyclic":
 
         def initial_data_placement_rowcyclic(data_id: DataID):
@@ -77,11 +77,14 @@ def setup_stencil_data(cfg):
 
         def initial_data_placement_blocked(data_id: DataID):
             ngpus = cfg.system.ngpus
-            batch = ngpus // 2
+            batch = data_config.width // (ngpus // 2)
 
             device_id_i = int(data_id.idx[-2] // batch)
             device_id_j = int(data_id.idx[-1] // batch)
-            idx = device_id_i + batch * device_id_j
+            idx = device_id_i + (ngpus // 2) * device_id_j
+            print(
+                f"Data {data_id.idx} {(device_id_i, device_id_j)} -> Device {idx % ngpus}"
+            )
             return Device(Architecture.GPU, idx % ngpus)
 
         data_config.initial_placement = initial_data_placement_blocked
