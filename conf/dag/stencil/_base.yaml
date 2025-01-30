@@ -1,5 +1,5 @@
 width: 4
-steps: 1000
+steps: 10
 dimension: 2
 interior_size: 25000000
 boundary_scale: 5

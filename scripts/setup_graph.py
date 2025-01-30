@@ -35,7 +35,7 @@ def setup_stencil_data(cfg):
     if cfg.dag.stencil.interior_comm != "None":
         print(cfg.dag.stencil.interior_comm)
         interior_size = 1000 * (
-            int(cfg.dag.stencil.interior_comm) / cfg.system.bandwidth
+            int(cfg.dag.stencil.interior_comm) * (cfg.system.bandwidth)
         )
     else:
         interior_size = cfg.dag.stencil.interior_size * 4 * cfg.dag.stencil.data_scale
@@ -43,7 +43,7 @@ def setup_stencil_data(cfg):
     if cfg.dag.stencil.boundary_comm != "None":
         print(cfg.dag.stencil.boundary_comm)
         boundary_size = 1000 * (
-            int(cfg.dag.stencil.boundary_comm) / cfg.system.bandwidth
+            int(cfg.dag.stencil.boundary_comm) * (cfg.system.bandwidth)
         )
     else:
 
@@ -95,9 +95,9 @@ def setup_stencil_data(cfg):
             device_id_i = int(data_id.idx[-2] // batch)
             device_id_j = int(data_id.idx[-1] // batch)
             idx = device_id_i + (ngpus // 2) * device_id_j
-            print(
-                f"Data {data_id.idx} {(device_id_i, device_id_j)} -> Device {idx % ngpus}"
-            )
+            # print(
+            #     f"Data {data_id.idx} {(device_id_i, device_id_j)} -> Device {idx % ngpus}"
+            # )
             return Device(Architecture.GPU, idx % ngpus)
 
         data_config.initial_placement = initial_data_placement_blocked
