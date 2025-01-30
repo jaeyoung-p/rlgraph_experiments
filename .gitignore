@@ -5,7 +5,8 @@ __pycache__/
 
 outputs/
 run.txt
-
+.aim
+multirun
 # C extensions
 *.so
 
