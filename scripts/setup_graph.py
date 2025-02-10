@@ -10,10 +10,12 @@ from task4feedback.fastsim.interface import (
     start_logger,
     ExecutionState,
 )
-from typing import Optional, Self
+from typing import Optional, Self, Tuple, Mapping, Dict
 from task4feedback.types import (
     DataID,
+    DataInfo,
     TaskID,
+    TaskInfo,
     TaskPlacementInfo,
     TaskRuntimeInfo,
     Device,
@@ -24,6 +26,7 @@ from task4feedback.graphs import CholeskyDataGraphConfig, CholeskyConfig, make_g
 from task4feedback.graphs.utilities import DataPlacer
 from task4feedback.simulator.utility import parse_size
 import numpy as np
+import itertools
 
 
 def setup_stencil_data(cfg):
@@ -31,9 +34,7 @@ def setup_stencil_data(cfg):
     data_config.n_devices = cfg.system.ngpus
     data_config.dimensions = cfg.dag.stencil.dimension
     data_config.width = cfg.dag.stencil.width
-
     if cfg.dag.stencil.interior_comm != "None":
-        print(cfg.dag.stencil.interior_comm)
         interior_size = 1000 * (
             int(cfg.dag.stencil.interior_comm) * (cfg.system.bandwidth)
         )
@@ -41,7 +42,6 @@ def setup_stencil_data(cfg):
         interior_size = cfg.dag.stencil.interior_size * 4 * cfg.dag.stencil.data_scale
 
     if cfg.dag.stencil.boundary_comm != "None":
-        print(cfg.dag.stencil.boundary_comm)
         boundary_size = 1000 * (
             int(cfg.dag.stencil.boundary_comm) * (cfg.system.bandwidth)
         )
@@ -57,12 +57,12 @@ def setup_stencil_data(cfg):
 
         boundary_size = compute_boundary_size()
 
-    print(
-        f"Time to move interior data: {interior_size / cfg.system.bandwidth}, Size: {interior_size}"
-    )
-    print(
-        f"Time to move boundary data: {boundary_size / cfg.system.bandwidth}, Size: {boundary_size}"
-    )
+    # print(
+    #     f"Time to move interior data: {interior_size / cfg.system.bandwidth}, Size: {interior_size}"
+    # )
+    # print(
+    #     f"Time to move boundary data: {boundary_size / cfg.system.bandwidth}, Size: {boundary_size}"
+    # )
 
     def sizes(data_id: DataID) -> int:
         return boundary_size if data_id.idx[1] == 1 else interior_size
@@ -102,6 +102,33 @@ def setup_stencil_data(cfg):
 
         data_config.initial_placement = initial_data_placement_blocked
 
+    elif cfg.dag.stencil.initial_data_placement == "load":
+        data_placer = np.load("assignments.npy")
+        all_combinations = [list(c) for c in itertools.product(range(4), repeat=4)]
+
+        sorted_combinations = sorted(
+            all_combinations,
+            key=lambda combo: (0 if len(set(combo)) == 4 else 1, combo),
+        )
+        history = [-1] * len(data_placer)
+        idx = cfg.dag.stencil.permute_idx % cfg.dag.stencil.worst_level
+        history[idx] += 1
+        history[idx] %= 24
+        # print(idx)
+
+        def initial_data_placement_load(data_id: DataID):
+            dev_id = sorted_combinations[history[idx]][
+                data_placer[idx][data_id.idx[-2]][data_id.idx[-1]]
+            ]
+            if cfg.system.ngpus == 4:
+                return Device(Architecture.GPU, dev_id)
+            elif dev_id == 0:  # 1 CPU 3 GPU setting
+                return Device(Architecture.CPU, 0)
+            else:
+                return Device(Architecture.GPU, dev_id - 1)
+
+        data_config.initial_placement = initial_data_placement_load
+
     else:
         raise ValueError(
             "Unknown initial data placement: {}".format(
@@ -112,10 +139,15 @@ def setup_stencil_data(cfg):
     return data_config
 
 
-def setup_stencil(cfg):
+def setup_stencil(cfg) -> Tuple[Mapping[TaskID, TaskInfo], Dict[DataID, DataInfo]]:
 
     def task_config(task_id: TaskID) -> TaskPlacementInfo:
         placement_info = TaskPlacementInfo()
+        if cfg.system.ngpus == 3:
+            placement_info.add(
+                (Device(Architecture.CPU, -1),),
+                TaskRuntimeInfo(task_time=1000, device_fraction=1),
+            )
         placement_info.add(
             (Device(Architecture.GPU, -1),),
             TaskRuntimeInfo(task_time=1000, device_fraction=1),
@@ -178,7 +210,7 @@ def setup_cholesky(cfg):
     return tasks, data
 
 
-def setup_graph(cfg):
+def setup_graph(cfg) -> Tuple[Mapping[TaskID, TaskInfo], Dict[DataID, DataInfo]]:
     if cfg.dag.type == "stencil":
         return setup_stencil(cfg)
     elif cfg.dag.type == "cholesky":

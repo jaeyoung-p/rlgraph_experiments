@@ -102,13 +102,22 @@ def stencil_rowcyclic(cfg, tasks, data):
 def stencil_block(cfg, tasks, data):
 
     def task_to_device(task_id: TaskID) -> Device:
-        ngpus = cfg.system.ngpus
+        if cfg.system.ngpus == 3:
+            ngpus = 4
+        else:
+            ngpus = 4
         batch = cfg.dag.stencil.width // (ngpus // 2)
 
         device_id_i = int(task_id.task_idx[-2] // batch)
         device_id_j = int(task_id.task_idx[-1] // batch)
-        idx = device_id_i + (ngpus // 2) * device_id_j
-        return Device(Architecture.GPU, idx % ngpus)
+        idx = (device_id_i + (ngpus // 2) * device_id_j) % ngpus
+        if cfg.system.ngpus == 3:
+            if idx == 0:
+                return Device(Architecture.CPU, 0)
+            else:
+                return Device(Architecture.GPU, idx - 1)
+        else:
+            return Device(Architecture.GPU, idx)
 
     def idx_to_device(task_idx: int) -> Device:
         return task_to_device(tasks.get_task_id(task_idx))

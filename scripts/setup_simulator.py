@@ -1,5 +1,6 @@
 from task4feedback.fastsim.interface import (
     SimulatorHandler,
+    Simulator,
     uniform_connected_devices,
     TNoiseType,
     CMapperType,
@@ -58,3 +59,27 @@ def setup_simulator(cfg, tasks, data, devices):
         simulator.disable_python_mapper()
 
     return simulator
+
+
+def initialize_simulator(
+    cfg, tasks, data, devices
+) -> tuple[SimulatorHandler, Simulator]:
+    H = SimulatorHandler(
+        tasks,
+        data,
+        devices,
+        noise_type=setup_task_noise(cfg),
+        seed=cfg.env.seed,
+        cmapper_type=CMapperType.EFT_DEQUEUE,
+    )
+    simulator = H.create_simulator()
+    simulator.initialize(use_data=cfg.env.use_data)
+    # simulator.randomize_durations()  # Not used if setup_task_noise is None
+    simulator.randomize_priorities()  # Not used if setup_task_noise is None
+    if cfg.mapper.python is True:
+        python_mapper = setup_python_mapper(cfg, H.task_handle, data)
+        simulator.set_python_mapper(python_mapper)
+        simulator.enable_python_mapper()
+    else:
+        simulator.disable_python_mapper()
+    return H, simulator
