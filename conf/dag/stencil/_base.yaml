@@ -7,7 +7,5 @@ data_scale: 10
 interior_comm: None 
 boundary_comm: None
 initial_data_placement: load
-custom_level: 10
-best_level: 1
-worst_level: 81
+load_idx: 0
 permute_idx: 0

@@ -83,7 +83,6 @@ def setup_stencil_data(cfg):
             return Device(Architecture.GPU, idx % ngpus)
 
         data_config.initial_placement = initial_data_placement_rowcyclic
-
     elif cfg.dag.stencil.initial_data_placement == "colcyclic":
         raise NotImplementedError("colcyclic not implemented")
     elif cfg.dag.stencil.initial_data_placement == "block":
@@ -101,24 +100,24 @@ def setup_stencil_data(cfg):
             return Device(Architecture.GPU, idx % ngpus)
 
         data_config.initial_placement = initial_data_placement_blocked
-
     elif cfg.dag.stencil.initial_data_placement == "load":
-        data_placer = np.load("assignments.npy")
-        all_combinations = [list(c) for c in itertools.product(range(4), repeat=4)]
+        placement_info = np.load("assignments.npy")
+        all_combinations = [list(c) for c in itertools.permutations(range(4))]
 
-        sorted_combinations = sorted(
-            all_combinations,
-            key=lambda combo: (0 if len(set(combo)) == 4 else 1, combo),
-        )
-        history = [-1] * len(data_placer)
-        idx = cfg.dag.stencil.permute_idx % cfg.dag.stencil.worst_level
-        history[idx] += 1
-        history[idx] %= 24
-        # print(idx)
+        if cfg.dag.stencil.load_idx >= len(placement_info):
+            raise ValueError(
+                f"Load index out of bounds Max: {len(placement_info)}, got {cfg.dag.stencil.load_idx}"
+            )
+        elif cfg.dag.stencil.permute_idx >= len(all_combinations):
+            raise ValueError(
+                f"Permutation index out of bounds Max: {len(all_combinations)}, got {cfg.dag.stencil.permute_idx}"
+            )
 
         def initial_data_placement_load(data_id: DataID):
-            dev_id = sorted_combinations[history[idx]][
-                data_placer[idx][data_id.idx[-2]][data_id.idx[-1]]
+            dev_id = all_combinations[cfg.dag.stencil.permute_idx][
+                placement_info[cfg.dag.stencil.load_idx][data_id.idx[-2]][
+                    data_id.idx[-1]
+                ]
             ]
             if cfg.system.ngpus == 4:
                 return Device(Architecture.GPU, dev_id)

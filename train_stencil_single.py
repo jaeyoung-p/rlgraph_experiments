@@ -99,17 +99,13 @@ class Args:
     """the batch size (computed in runtime)"""
     minibatch_size: int = 0
     """the mini-batch size (computed in runtime)"""
-    num_iterations: int = 1280
+    num_iterations: int = 10000
     """the number of iterations (computed in runtime)"""
 
-    graphs_per_update: int = 10
+    graphs_per_update: int = 1
     """the number of graphs to use for each update"""
-    reward: str = "exp"
+    reward: str = "percent_improvement"
     load_model: bool = False
-
-
-total_runs = 0
-LI = 0
 
 
 def init_weights(m):
@@ -268,68 +264,32 @@ def my_app(cfg: DictConfig) -> None:
 
     h.apply(init_weights)
 
-    eft_times = []
-    block_times = []
-    for i in range(24):
-        cfg.dag.stencil.permute_idx = 80
-        devices = setup_system(cfg)
-        tasks, _data = setup_graph(cfg)
-        H, sim = initialize_simulator(
-            cfg,
-            tasks,
-            _data,
-            devices,
-        )
-        sim.run()
-        eft_times.append(sim.get_current_time())
-
-    for i in range(24):
-        cfg.mapper.type = "block"
-        cfg.mapper.python = True
-        cfg.dag.stencil.permute_idx = 80
-        devices = setup_system(cfg)
-        tasks, _data = setup_graph(cfg)
-        H, sim = initialize_simulator(
-            cfg,
-            tasks,
-            _data,
-            devices,
-        )
-        sim.run()
-        block_times.append(sim.get_current_time())
-        print(block_times[i] - eft_times[i])
-    print(eft_times)
-    print(block_times)
-
-    cfg.mapper.type = "eft"
-    cfg.mapper.python = False
+    cfg.mapper.type = "block"
+    cfg.mapper.python = True
+    devices = setup_system(cfg)
+    tasks, _data = setup_graph(cfg)
+    H, SIM = initialize_simulator(
+        cfg,
+        tasks,
+        _data,
+        devices,
+    )
+    block_sim = H.copy(SIM)
+    block_sim.run()
+    block_time = block_sim.get_current_time()
+    H.set_python_mapper(rnetmap)
 
     def collect_batch(episodes, h, global_step=0):
         batch_info = []
         for e in range(0, episodes):
-            global total_runs
-            cfg.dag.stencil.permute_idx = 80
-            total_runs += 1
-            devices = setup_system(cfg)
-            tasks, _data = setup_graph(cfg)
-            H, sim = initialize_simulator(
-                cfg,
-                tasks,
-                _data,
-                devices,
-            )
-            H.set_python_mapper(rnetmap)
+            sim = H.copy(SIM)
             sim.enable_python_mapper()
             done = False
             # Run baseline
             obs, immediate_reward, done, terminated, info = sim.step()
             episode_info = []
 
-            eft_time = eft_times[total_runs % 24]
-            block_time = block_times[total_runs % 24]
-
             while not done:
-
                 candidates = sim.get_mapping_candidates()
                 record = {}
                 action_list = RandomNetworkMapper(h).map_tasks(candidates, sim, record)
@@ -340,7 +300,7 @@ def my_app(cfg: DictConfig) -> None:
                 episode_info.append(record)
 
                 if done:
-                    baseline = eft_time if record["time"] > eft_time else block_time
+                    baseline = block_time
 
                     if args.reward == "percent_improvement":
                         record["reward"] = 1 + (baseline - record["time"]) / baseline
@@ -354,12 +314,7 @@ def my_app(cfg: DictConfig) -> None:
                         else:
                             record["reward"] = 0
 
-                    wandb.log(
-                        {"episode_reward": record["reward"]},
-                    )
-                    print(
-                        f"{total_runs}: {record['reward']}, {record['time']}, EFT:{eft_time}, Block:{block_time}"
-                    )
+                    print(f"{record['reward']}, {record['time']}, Block:{block_time}")
                     break
 
                 else:
@@ -373,6 +328,7 @@ def my_app(cfg: DictConfig) -> None:
                     )
 
             batch_info.extend(episode_info)
+
         return batch_info
 
     def batch_update(batch_info, update_epoch, h, optimizer, global_step):
@@ -383,6 +339,7 @@ def my_app(cfg: DictConfig) -> None:
         dclipfracs = []
 
         state = []
+        total_rewards = 0
         for i in range(n_obs):
             state.append(batch_info[i]["state"])
             state[i]["dlogprob"] = batch_info[i]["dlogprob"]
@@ -390,8 +347,7 @@ def my_app(cfg: DictConfig) -> None:
             state[i]["dactions"] = batch_info[i]["dactions"]
             state[i]["advantage"] = batch_info[i]["advantage"]
             state[i]["returns"] = batch_info[i]["returns"]
-
-        global LI
+            total_rewards += batch_info[i]["returns"]
 
         for k in range(update_epoch):
             nbatches = args.num_minibatches
@@ -455,18 +411,17 @@ def my_app(cfg: DictConfig) -> None:
                         "losses/value_loss": v_loss.item(),
                         "losses/entropy": entropy_loss.item(),
                         "losses/dentropy": dentropy.mean().item(),
-                    },
-                )
-                wandb.log(
-                    {
                         "losses/dratio": dratio.mean().item(),
                         "losses/dpolicy_loss": dpg_loss.item(),
                         "losses/dold_approx_kl": dold_approx_kl.item(),
                         "losses/dapprox_kl": dapprox_kl.item(),
                         "losses/dclipfrac": np.mean(dclipfracs),
                     },
+                    commit=False,
                 )
-                LI = LI + 1
+        wandb.log(
+            {"episode_reward": total_rewards / n_obs},
+        )
 
     for epoch in range(args.num_iterations):
         print("Epoch: ", epoch)
