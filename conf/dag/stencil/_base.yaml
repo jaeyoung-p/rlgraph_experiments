@@ -7,5 +7,6 @@ data_scale: 10
 interior_comm: None 
 boundary_comm: None
 initial_data_placement: load
-load_idx: 0
+placement_file_location: assignments_4.npy
+load_idx: 8
 permute_idx: 0

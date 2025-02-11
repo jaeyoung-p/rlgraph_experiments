@@ -101,9 +101,23 @@ def setup_stencil_data(cfg):
 
         data_config.initial_placement = initial_data_placement_blocked
     elif cfg.dag.stencil.initial_data_placement == "load":
-        placement_info = np.load("assignments.npy")
-        all_combinations = [list(c) for c in itertools.permutations(range(4))]
+        if cfg.system.ngpus not in [3, 4]:
+            raise ValueError(
+                f"Load placement only supported for 3GPU+1CPU or 4 GPUs, got {cfg.system.ngpus}"
+            )
+        M = cfg.dag.stencil.width
+        if M % 2 != 0:
+            raise ValueError(
+                "Load placement only supported for even width, got {}".format(M)
+            )
+        placement_info = np.load(cfg.dag.stencil.placement_file_location)
+        if placement_info.shape != (1 + 2 * M * (M - 2) // 2, M, M):
+            raise ValueError(
+                f"Placement info shape mismatch, expected {(1+2*M*(M-2)//2, M, M)}, got {placement_info.shape}"
+            )
+        # End file sanity check
 
+        all_combinations = [list(c) for c in itertools.permutations(range(4))]
         if cfg.dag.stencil.load_idx >= len(placement_info):
             raise ValueError(
                 f"Load index out of bounds Max: {len(placement_info)}, got {cfg.dag.stencil.load_idx}"
@@ -113,13 +127,14 @@ def setup_stencil_data(cfg):
                 f"Permutation index out of bounds Max: {len(all_combinations)}, got {cfg.dag.stencil.permute_idx}"
             )
 
+        # End user input sanity check
         def initial_data_placement_load(data_id: DataID):
             dev_id = all_combinations[cfg.dag.stencil.permute_idx][
                 placement_info[cfg.dag.stencil.load_idx][data_id.idx[-2]][
                     data_id.idx[-1]
                 ]
             ]
-            if cfg.system.ngpus == 4:
+            if cfg.system.ngpus == 4:  # 4 GPU setting
                 return Device(Architecture.GPU, dev_id)
             elif dev_id == 0:  # 1 CPU 3 GPU setting
                 return Device(Architecture.CPU, 0)
