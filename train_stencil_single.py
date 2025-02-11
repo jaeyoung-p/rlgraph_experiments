@@ -99,7 +99,7 @@ class Args:
     """the batch size (computed in runtime)"""
     minibatch_size: int = 0
     """the mini-batch size (computed in runtime)"""
-    num_iterations: int = 10000
+    num_iterations: int = 25000
     """the number of iterations (computed in runtime)"""
 
     graphs_per_update: int = 1
@@ -211,7 +211,7 @@ def my_app(cfg: DictConfig) -> None:
     torch.backends.cudnn.deterministic = args.torch_deterministic
 
     wandb.init(
-        project="Stencil Adversarial Data Placement",
+        project="Stencil Adversarial Data Placement Single",
         name=run_name,
         config={
             "env_id": args.env_id,
