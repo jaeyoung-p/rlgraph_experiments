@@ -34,6 +34,12 @@ from task4feedback.graphs import *
 import wandb
 from datetime import datetime
 
+import numpy as np
+import random
+import math
+from dataclasses import dataclass
+import concurrent.futures
+
 logging.disable(logging.CRITICAL)
 
 
@@ -98,17 +104,13 @@ class Args:
     """the batch size (computed in runtime)"""
     minibatch_size: int = 0
     """the mini-batch size (computed in runtime)"""
-    num_iterations: int = 1280
+    num_iterations: int = 25000
     """the number of iterations (computed in runtime)"""
 
     graphs_per_update: int = 10
     """the number of graphs to use for each update"""
     reward: str = "percent_improvement"
     load_model: bool = False
-
-
-total_runs = 0
-LI = 0
 
 
 def init_weights(m):
@@ -120,9 +122,7 @@ def init_weights(m):
         torch.nn.init.constant_(m.bias, 0.0)
 
 
-def logits_to_actions(
-    logits, action=None
-) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+def logits_to_actions(logits, action=None) -> tuple:
     probs = torch.distributions.Categorical(logits=logits)
     if action is None:
         action = probs.sample()
@@ -133,15 +133,15 @@ class GreedyNetworkMapper(PythonMapper):
     def __init__(self, model):
         self.model = model
 
-    def map_tasks(self, candidates: np.ndarray[np.int32], simulator):
+    def map_tasks(self, candidates: np.ndarray, simulator):
         data = simulator.observer.local_graph_features(candidates, k_hop=1)
         with torch.no_grad():
             d, v = self.model.forward(data)
-            # Choose argmax of network output for priority and device assignment
+            # Choose argmax of network output for device assignment
             dev_per_task = torch.argmax(d, dim=-1)
             action_list = []
             for i in range(len(candidates)):
-                # Check if p_per_task and dev_per_task are scalars
+                # Handle scalar tensor output
                 if dev_per_task.dim() == 0:
                     dev_task = dev_per_task.item()
                 else:
@@ -158,18 +158,15 @@ class GreedyNetworkMapper(PythonMapper):
 
 
 class RandomNetworkMapper(PythonMapper):
-
     def __init__(self, model):
         self.model = model
 
-    def map_tasks(self, candidates: np.ndarray[np.int32], simulator, output=None):
+    def map_tasks(self, candidates: np.ndarray, simulator, output=None):
         data = simulator.observer.local_graph_features(candidates, k_hop=1)
-
         with torch.no_grad():
             self.model.eval()
             d, v = self.model.forward(data)
             self.model.train()
-
             # sample from network output
             dev_per_task, dlogprob, _ = logits_to_actions(d)
 
@@ -182,7 +179,6 @@ class RandomNetworkMapper(PythonMapper):
 
             action_list = []
             for i in range(len(candidates)):
-
                 a = Action(
                     candidates[i],
                     i,
@@ -190,7 +186,6 @@ class RandomNetworkMapper(PythonMapper):
                     0,
                     0,
                 )
-
                 action_list.append(a)
         return action_list
 
@@ -201,9 +196,71 @@ class RandomNetworkMapper(PythonMapper):
         return (p, plogprob, pentropy), (d, dlogprob, dentropy), v
 
 
+def run_episode(e, h, H, SIM, block_time, args):
+    """
+    Runs a single simulation episode and returns the collected episode info.
+    """
+    sim = H.copy(SIM)
+    done = False
+    # Run initial step to initialize the simulator
+    obs, immediate_reward, done, terminated, info = sim.step()
+    episode_info = []
+
+    while not done:
+        candidates = sim.get_mapping_candidates()
+        record = {}
+        action_list = RandomNetworkMapper(h).map_tasks(candidates, sim, record)
+        obs, immediate_reward, done, terminated, info = sim.step(action_list)
+        record["done"] = done
+        record["time"] = sim.get_current_time()
+        episode_info.append(record)
+
+        if done:
+            baseline = block_time
+            if args.reward == "percent_improvement":
+                record["reward"] = 1 + (baseline - record["time"]) / baseline
+            elif args.reward == "exp":
+                record["reward"] = math.exp((baseline - record["time"]) / baseline) - 1
+            elif args.reward == "better":
+                record["reward"] = 1 if record["time"] < baseline else 0
+
+            print(f"{record['reward']}, {record['time']}, Block:{block_time}")
+            break
+        else:
+            record["reward"] = 0
+
+    with torch.no_grad():
+        final_reward = episode_info[-1]["reward"]
+        for t in range(len(episode_info)):
+            episode_info[t]["returns"] = final_reward
+            # If 'value' is missing in a record, default to 0.
+            episode_info[t]["advantage"] = final_reward - episode_info[t].get(
+                "value", 0
+            )
+    return episode_info
+
+
+def collect_batch(episodes, h, H, SIM, block_time, args, global_step=0):
+    """
+    Parallelized version of collect_batch that collects simulation episodes concurrently.
+    """
+    batch_info = []
+    with concurrent.futures.ThreadPoolExecutor(max_workers=episodes) as executor:
+        futures = [
+            executor.submit(run_episode, e, h, H, SIM, block_time, args)
+            for e in range(episodes)
+        ]
+        for future in concurrent.futures.as_completed(futures):
+            episode_info = future.result()
+            batch_info.extend(episode_info)
+    return batch_info
+
+
 @hydra.main(config_path="conf", config_name="config", version_base="1.2")
 def my_app(cfg: DictConfig) -> None:
-    run_name = f"ppo_Stencil_(10x10)" + datetime.today().strftime("%Y-%m-%d %H:%M:%S")
+    run_name = f"10g_ppo_Stencil_(4x4)x14" + datetime.today().strftime(
+        "%Y-%m-%d %H:%M:%S"
+    )
     if not os.path.exists(f"outputs/{run_name}"):
         os.makedirs(f"outputs/{run_name}")
 
@@ -214,7 +271,7 @@ def my_app(cfg: DictConfig) -> None:
     torch.backends.cudnn.deterministic = args.torch_deterministic
 
     wandb.init(
-        project="Stencil Adversarial Data Placement",
+        project="Stencil Adversarial Data Placement Single",
         name=run_name,
         config={
             "env_id": args.env_id,
@@ -247,105 +304,41 @@ def my_app(cfg: DictConfig) -> None:
     lr = args.learning_rate
     epochs = args.num_iterations
     graphs_per_epoch = args.graphs_per_update
-
+    cfg.mapper.type = "block"
+    cfg.mapper.python = True
     devices = setup_system(cfg)
     tasks, _data = setup_graph(cfg)
-    # Initialize a dummy simulator to get the graph features
-    # Only GPUs are used for task computations
-    H, sim = initialize_simulator(
+    # Initialize a dummy simulator to get the graph features.
+    H, SIM = initialize_simulator(
         cfg,
         tasks,
         _data,
         devices,
     )
-    candidates = sim.get_mapping_candidates()
-    local_graph = sim.observer.local_graph_features(candidates)
+    block_sim = H.copy(SIM)
+    block_sim.run()
+    block_time = block_sim.get_current_time()
+
+    candidates = SIM.get_mapping_candidates()
+    local_graph = SIM.observer.local_graph_features(candidates)
     h = TaskAssignmentNetDeviceOnly(cfg.system.ngpus, args.hidden_dim, local_graph)
     optimizer = torch.optim.Adam(h.parameters(), lr=lr)
     rnetmap = RandomNetworkMapper(h)
     H.set_python_mapper(rnetmap)
 
     h.apply(init_weights)
-
-    def collect_batch(episodes, h, global_step=0):
-        batch_info = []
-        for e in range(0, episodes):
-            global total_runs
-            cfg.dag.stencil.permute_idx = total_runs
-            total_runs += 1
-            devices = setup_system(cfg)
-            tasks, _data = setup_graph(cfg)
-            H, sim = initialize_simulator(
-                cfg,
-                tasks,
-                _data,
-                devices,
-            )
-            H.set_python_mapper(rnetmap)
-            env = H.copy(sim)
-            done = False
-
-            # Run baseline
-            baseline = H.copy(sim)
-            baseline.disable_python_mapper()
-            a = H.get_new_c_mapper()
-            baseline.set_c_mapper(a)
-            baseline_done = baseline.run()
-            eft_time = baseline.get_current_time()
-            print(eft_time)
-            # Run env to first mapping
-            env.enable_python_mapper()
-            obs, immediate_reward, done, terminated, info = env.step()
-            print(done)
-            episode_info = []
-
-            while not done:
-                candidates = env.get_mapping_candidates()
-                record = {}
-                action_list = RandomNetworkMapper(h).map_tasks(candidates, env, record)
-
-                obs, immediate_reward, done, terminated, info = env.step(action_list)
-                record["done"] = done
-                record["time"] = env.get_current_time()
-                episode_info.append(record)
-
-                if done:
-                    if args.reward == "percent_improvement":
-                        percent_improvement = 1 + (eft_time - record["time"]) / eft_time
-                        percent_improvement = percent_improvement
-                        record["reward"] = percent_improvement
-                    elif args.reward == "better":
-                        if record["time"] < eft_time:
-                            record["reward"] = 1
-                        else:
-                            record["reward"] = 0
-
-                    wandb.log(
-                        {"episode_reward": record["reward"]},
-                    )
-
-                    break
-                else:
-                    record["reward"] = 0
-
-            with torch.no_grad():
-                for t in range(len(episode_info)):
-                    episode_info[t]["returns"] = episode_info[-1]["reward"]
-                    episode_info[t]["advantage"] = (
-                        episode_info[-1]["reward"] - episode_info[t]["value"]
-                    )
-
-            batch_info.extend(episode_info)
-        return batch_info
+    H, SIM = initialize_simulator(
+        cfg,
+        tasks,
+        _data,
+        devices,
+    )
 
     def batch_update(batch_info, update_epoch, h, optimizer, global_step):
         n_obs = len(batch_info)
-
-        batch_size = args.batch_size
-
         dclipfracs = []
-
         state = []
+        total_rewards = 0
         for i in range(n_obs):
             state.append(batch_info[i]["state"])
             state[i]["dlogprob"] = batch_info[i]["dlogprob"]
@@ -353,8 +346,7 @@ def my_app(cfg: DictConfig) -> None:
             state[i]["dactions"] = batch_info[i]["dactions"]
             state[i]["advantage"] = batch_info[i]["advantage"]
             state[i]["returns"] = batch_info[i]["returns"]
-
-        global LI
+            total_rewards += batch_info[i]["returns"]
 
         for k in range(update_epoch):
             nbatches = args.num_minibatches
@@ -362,16 +354,12 @@ def my_app(cfg: DictConfig) -> None:
             loader = torch_geometric.loader.DataLoader(
                 state, batch_size=batch_size, shuffle=True
             )
-
             for i, batch in enumerate(loader):
                 batch: torch_geometric.data.Batch
-                out: Tuple[torch.Tensor, torch.Tensor] = h(batch, batch["tasks"].batch)
-                d, v = out
-
+                d, v = h(batch, batch["tasks"].batch)
                 da, dlogprob, dentropy = logits_to_actions(
                     d, batch["dactions"].detach().view(-1)
                 )
-
                 dlogratio = dlogprob.view(-1) - batch["dlogprob"].detach().view(-1)
                 dratio = dlogratio.exp()
 
@@ -383,7 +371,6 @@ def my_app(cfg: DictConfig) -> None:
                     ]
 
                 mb_advantages = batch["advantage"].detach().view(-1)
-
                 dpg_loss1 = mb_advantages * dratio.view(-1)
                 dpg_loss2 = mb_advantages * torch.clamp(
                     dratio.view(-1), 1 - args.clip_coef, 1 + args.clip_coef
@@ -403,9 +390,7 @@ def my_app(cfg: DictConfig) -> None:
 
                 entropy_loss = dentropy.mean()
                 loss = (
-                    -1 * (dpg_loss)
-                    - args.ent_coef * entropy_loss
-                    + v_loss * args.vf_coef
+                    -1 * dpg_loss - args.ent_coef * entropy_loss + v_loss * args.vf_coef
                 )
 
                 optimizer.zero_grad()
@@ -418,23 +403,22 @@ def my_app(cfg: DictConfig) -> None:
                         "losses/value_loss": v_loss.item(),
                         "losses/entropy": entropy_loss.item(),
                         "losses/dentropy": dentropy.mean().item(),
-                    },
-                )
-                wandb.log(
-                    {
                         "losses/dratio": dratio.mean().item(),
                         "losses/dpolicy_loss": dpg_loss.item(),
                         "losses/dold_approx_kl": dold_approx_kl.item(),
                         "losses/dapprox_kl": dapprox_kl.item(),
                         "losses/dclipfrac": np.mean(dclipfracs),
                     },
+                    commit=False,
                 )
-                LI = LI + 1
+        wandb.log({"episode_reward": total_rewards / n_obs})
 
     for epoch in range(args.num_iterations):
         print("Epoch: ", epoch)
-
-        batch_info = collect_batch(graphs_per_epoch, h, global_step=epoch)
+        # Use the parallelized collect_batch function.
+        batch_info = collect_batch(
+            graphs_per_epoch, h, H, SIM, block_time, args, global_step=epoch
+        )
         batch_update(batch_info, args.update_epochs, h, optimizer, global_step=epoch)
 
         # --- Gradient Monitoring ---
@@ -444,14 +428,15 @@ def my_app(cfg: DictConfig) -> None:
                 param_norm = param.grad.data.norm(2).item()
                 total_norm += param_norm**2
         total_norm = total_norm**0.5
-        # # Save the model
+
+        # Save the model every 100 epochs.
         if (epoch + 1) % 100 == 0:
             torch.save(
                 h.state_dict(),
                 f"outputs/{run_name}/checkpoint_epoch_{epoch+1}.pth",
             )
 
-    # save pytorch model
+    # Save the final model.
     torch.save(h.state_dict(), f"outputs/{run_name}/model.pth")
     wandb.finish()
 

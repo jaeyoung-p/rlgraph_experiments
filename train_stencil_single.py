@@ -34,7 +34,6 @@ from task4feedback.graphs import *
 import wandb
 from datetime import datetime
 
-assignments = np.load("assignments.npy")
 logging.disable(logging.CRITICAL)
 
 
