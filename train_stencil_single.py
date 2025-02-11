@@ -102,7 +102,7 @@ class Args:
     num_iterations: int = 25000
     """the number of iterations (computed in runtime)"""
 
-    graphs_per_update: int = 1
+    graphs_per_update: int = 10
     """the number of graphs to use for each update"""
     reward: str = "percent_improvement"
     load_model: bool = False
@@ -200,7 +200,9 @@ class RandomNetworkMapper(PythonMapper):
 
 @hydra.main(config_path="conf", config_name="config", version_base="1.2")
 def my_app(cfg: DictConfig) -> None:
-    run_name = f"ppo_Stencil_(10x10)" + datetime.today().strftime("%Y-%m-%d %H:%M:%S")
+    run_name = f"10g_ppo_Stencil_(10x10)" + datetime.today().strftime(
+        "%Y-%m-%d %H:%M:%S"
+    )
     if not os.path.exists(f"outputs/{run_name}"):
         os.makedirs(f"outputs/{run_name}")
 
@@ -244,30 +246,12 @@ def my_app(cfg: DictConfig) -> None:
     lr = args.learning_rate
     epochs = args.num_iterations
     graphs_per_epoch = args.graphs_per_update
-
-    devices = setup_system(cfg)
-    tasks, _data = setup_graph(cfg)
-    # Initialize a dummy simulator to get the graph features
-    # Only GPUs are used for task computations
-    H, sim = initialize_simulator(
-        cfg,
-        tasks,
-        _data,
-        devices,
-    )
-    candidates = sim.get_mapping_candidates()
-    local_graph = sim.observer.local_graph_features(candidates)
-    h = TaskAssignmentNetDeviceOnly(cfg.system.ngpus, args.hidden_dim, local_graph)
-    optimizer = torch.optim.Adam(h.parameters(), lr=lr)
-    rnetmap = RandomNetworkMapper(h)
-    H.set_python_mapper(rnetmap)
-
-    h.apply(init_weights)
-
     cfg.mapper.type = "block"
     cfg.mapper.python = True
     devices = setup_system(cfg)
     tasks, _data = setup_graph(cfg)
+    # Initialize a dummy simulator to get the graph features
+    # Only GPUs are used for task computations
     H, SIM = initialize_simulator(
         cfg,
         tasks,
@@ -277,13 +261,26 @@ def my_app(cfg: DictConfig) -> None:
     block_sim = H.copy(SIM)
     block_sim.run()
     block_time = block_sim.get_current_time()
+
+    candidates = SIM.get_mapping_candidates()
+    local_graph = SIM.observer.local_graph_features(candidates)
+    h = TaskAssignmentNetDeviceOnly(cfg.system.ngpus, args.hidden_dim, local_graph)
+    optimizer = torch.optim.Adam(h.parameters(), lr=lr)
+    rnetmap = RandomNetworkMapper(h)
     H.set_python_mapper(rnetmap)
+
+    h.apply(init_weights)
+    H, SIM = initialize_simulator(
+        cfg,
+        tasks,
+        _data,
+        devices,
+    )
 
     def collect_batch(episodes, h, global_step=0):
         batch_info = []
         for e in range(0, episodes):
             sim = H.copy(SIM)
-            sim.enable_python_mapper()
             done = False
             # Run baseline
             obs, immediate_reward, done, terminated, info = sim.step()
