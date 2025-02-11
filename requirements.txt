@@ -1,3 +1,4 @@
+--extra-index-url https://download.pytorch.org/whl/cpu
 aim==3.27.0
 aim-ui==3.27.0
 aimrecords==0.0.7
