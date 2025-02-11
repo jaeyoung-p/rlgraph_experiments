@@ -199,7 +199,7 @@ class RandomNetworkMapper(PythonMapper):
 
 @hydra.main(config_path="conf", config_name="config", version_base="1.2")
 def my_app(cfg: DictConfig) -> None:
-    run_name = f"10g_ppo_Stencil_(10x10)" + datetime.today().strftime(
+    run_name = f"10g_ppo_Stencil_(4x4)x14" + datetime.today().strftime(
         "%Y-%m-%d %H:%M:%S"
     )
     if not os.path.exists(f"outputs/{run_name}"):
