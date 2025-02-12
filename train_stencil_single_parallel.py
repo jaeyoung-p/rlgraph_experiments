@@ -41,7 +41,6 @@ from dataclasses import dataclass
 import concurrent.futures
 
 # Load assignments (if needed) and disable logging
-assignments = np.load("assignments.npy")
 logging.disable(logging.CRITICAL)
 
 
