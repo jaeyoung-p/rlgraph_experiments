@@ -40,6 +40,8 @@ import math
 from dataclasses import dataclass
 import concurrent.futures
 
+# Load assignments (if needed) and disable logging
+assignments = np.load("assignments.npy")
 logging.disable(logging.CRITICAL)
 
 
@@ -141,7 +143,6 @@ class GreedyNetworkMapper(PythonMapper):
             dev_per_task = torch.argmax(d, dim=-1)
             action_list = []
             for i in range(len(candidates)):
-                # Handle scalar tensor output
                 if dev_per_task.dim() == 0:
                     dev_task = dev_per_task.item()
                 else:
@@ -167,7 +168,7 @@ class RandomNetworkMapper(PythonMapper):
             self.model.eval()
             d, v = self.model.forward(data)
             self.model.train()
-            # sample from network output
+            # Sample from network output
             dev_per_task, dlogprob, _ = logits_to_actions(d)
 
             if output is not None:
@@ -196,13 +197,12 @@ class RandomNetworkMapper(PythonMapper):
         return (p, plogprob, pentropy), (d, dlogprob, dentropy), v
 
 
-def run_episode(e, h, H, SIM, block_time, args):
+def run_episode(e, h, sim, block_time, args):
     """
-    Runs a single simulation episode and returns the collected episode info.
+    Runs a single simulation episode using a pre-created simulator instance.
     """
-    sim = H.copy(SIM)
     done = False
-    # Run initial step to initialize the simulator
+    # Initialize the simulator (e.g. for the first step)
     obs, immediate_reward, done, terminated, info = sim.step()
     episode_info = []
 
@@ -233,7 +233,7 @@ def run_episode(e, h, H, SIM, block_time, args):
         final_reward = episode_info[-1]["reward"]
         for t in range(len(episode_info)):
             episode_info[t]["returns"] = final_reward
-            # If 'value' is missing in a record, default to 0.
+            # Use a default of 0 if no 'value' exists.
             episode_info[t]["advantage"] = final_reward - episode_info[t].get(
                 "value", 0
             )
@@ -242,13 +242,19 @@ def run_episode(e, h, H, SIM, block_time, args):
 
 def collect_batch(episodes, h, H, SIM, block_time, args, global_step=0):
     """
-    Parallelized version of collect_batch that collects simulation episodes concurrently.
+    Parallelized version of collect_batch.
+
+    Pre-creates an array of simulator copies—one for each episode—to avoid repeatedly
+    calling H.copy(SIM) inside each thread.
     """
     batch_info = []
+    # Create an array of independent simulator copies.
+    simulators = [H.copy(SIM) for _ in range(episodes)]
     with concurrent.futures.ThreadPoolExecutor(max_workers=episodes) as executor:
+        # Submit each pre-created simulator along with its index.
         futures = [
-            executor.submit(run_episode, e, h, H, SIM, block_time, args)
-            for e in range(episodes)
+            executor.submit(run_episode, e, h, sim, block_time, args)
+            for e, sim in enumerate(simulators)
         ]
         for future in concurrent.futures.as_completed(futures):
             episode_info = future.result()
@@ -258,7 +264,7 @@ def collect_batch(episodes, h, H, SIM, block_time, args, global_step=0):
 
 @hydra.main(config_path="conf", config_name="config", version_base="1.2")
 def my_app(cfg: DictConfig) -> None:
-    run_name = f"10g_ppo_Stencil_(4x4)x14" + datetime.today().strftime(
+    run_name = f"10g_ppo_Stencil_(10x10)" + datetime.today().strftime(
         "%Y-%m-%d %H:%M:%S"
     )
     if not os.path.exists(f"outputs/{run_name}"):
@@ -327,6 +333,7 @@ def my_app(cfg: DictConfig) -> None:
     H.set_python_mapper(rnetmap)
 
     h.apply(init_weights)
+    # Reinitialize the simulator after model initialization.
     H, SIM = initialize_simulator(
         cfg,
         tasks,
@@ -354,6 +361,7 @@ def my_app(cfg: DictConfig) -> None:
             loader = torch_geometric.loader.DataLoader(
                 state, batch_size=batch_size, shuffle=True
             )
+
             for i, batch in enumerate(loader):
                 batch: torch_geometric.data.Batch
                 d, v = h(batch, batch["tasks"].batch)
@@ -415,7 +423,7 @@ def my_app(cfg: DictConfig) -> None:
 
     for epoch in range(args.num_iterations):
         print("Epoch: ", epoch)
-        # Use the parallelized collect_batch function.
+        # Use the parallelized collect_batch function. Each episode uses a pre-created simulator.
         batch_info = collect_batch(
             graphs_per_epoch, h, H, SIM, block_time, args, global_step=epoch
         )
