@@ -74,8 +74,8 @@ def initialize_simulator(
     )
     simulator = H.create_simulator()
     simulator.initialize(use_data=cfg.env.use_data)
-    # simulator.randomize_durations()  # Not used if setup_task_noise is None
-    simulator.randomize_priorities()  # Not used if setup_task_noise is None
+    simulator.randomize_durations()  # Not used if setup_task_noise is None
+    # simulator.randomize_priorities()
     if cfg.mapper.python is True:
         python_mapper = setup_python_mapper(cfg, H.task_handle, data)
         simulator.set_python_mapper(python_mapper)

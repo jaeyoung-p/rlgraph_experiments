@@ -89,15 +89,21 @@ def setup_stencil_data(cfg):
 
         def initial_data_placement_blocked(data_id: DataID):
             ngpus = cfg.system.ngpus
+            if ngpus == 3:
+                ngpus = 4
             batch = data_config.width // (ngpus // 2)
 
             device_id_i = int(data_id.idx[-2] // batch)
             device_id_j = int(data_id.idx[-1] // batch)
             idx = device_id_i + (ngpus // 2) * device_id_j
-            # print(
-            #     f"Data {data_id.idx} {(device_id_i, device_id_j)} -> Device {idx % ngpus}"
-            # )
-            return Device(Architecture.GPU, idx % ngpus)
+
+            dev_id = idx % ngpus
+            if cfg.system.ngpus == 4:
+                return Device(Architecture.GPU, dev_id)
+            elif dev_id == 0:
+                return Device(Architecture.CPU, 0)
+            else:
+                return Device(Architecture.GPU, dev_id - 1)
 
         data_config.initial_placement = initial_data_placement_blocked
     elif cfg.dag.stencil.initial_data_placement == "load":
@@ -120,11 +126,11 @@ def setup_stencil_data(cfg):
         all_combinations = [list(c) for c in itertools.permutations(range(4))]
         if cfg.dag.stencil.load_idx >= len(placement_info):
             raise ValueError(
-                f"Load index out of bounds Max: {len(placement_info)}, got {cfg.dag.stencil.load_idx}"
+                f"Load index out of bounds Max: {len(placement_info)-1}, got {cfg.dag.stencil.load_idx}"
             )
         elif cfg.dag.stencil.permute_idx >= len(all_combinations):
             raise ValueError(
-                f"Permutation index out of bounds Max: {len(all_combinations)}, got {cfg.dag.stencil.permute_idx}"
+                f"Permutation index out of bounds Max: {len(all_combinations)-1}, got {cfg.dag.stencil.permute_idx}"
             )
 
         # End user input sanity check

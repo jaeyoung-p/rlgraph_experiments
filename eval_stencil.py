@@ -111,24 +111,6 @@ total_runs = 0
 LI = 0
 
 
-def init_weights(m):
-    """
-    Initializes LayerNorm layers.
-    """
-    if isinstance(m, torch.nn.LayerNorm):
-        torch.nn.init.constant_(m.weight, 1.0)
-        torch.nn.init.constant_(m.bias, 0.0)
-
-
-def logits_to_actions(
-    logits, action=None
-) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-    probs = torch.distributions.Categorical(logits=logits)
-    if action is None:
-        action = probs.sample()
-    return action, probs.log_prob(action), probs.entropy()
-
-
 class GreedyNetworkMapper(PythonMapper):
     def __init__(self, model):
         self.model = model
@@ -157,69 +139,159 @@ class GreedyNetworkMapper(PythonMapper):
         return action_list
 
 
+def logits_to_actions(
+    logits, action=None
+) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    probs = torch.distributions.Categorical(logits=logits)
+    if action is None:
+        action = probs.sample()
+    return action, probs.log_prob(action), probs.entropy()
+
+
+class RandomNetworkMapper(PythonMapper):
+
+    def __init__(self, model):
+        self.model = model
+
+    def map_tasks(self, candidates: np.ndarray[np.int32], simulator, output=None):
+        data = simulator.observer.local_graph_features(candidates, k_hop=1)
+
+        with torch.no_grad():
+            self.model.eval()
+            d, v = self.model.forward(data)
+            self.model.train()
+
+            # sample from network output
+            dev_per_task, dlogprob, _ = logits_to_actions(d)
+
+            if output is not None:
+                output["candidates"] = candidates
+                output["state"] = data
+                output["dlogprob"] = dlogprob
+                output["value"] = v
+                output["dactions"] = dev_per_task
+
+            action_list = []
+            for i in range(len(candidates)):
+
+                a = Action(
+                    candidates[i],
+                    i,
+                    dev_per_task,
+                    0,
+                    0,
+                )
+
+                action_list.append(a)
+        return action_list
+
+    def evaluate(self, obs, daction, paction):
+        p, d, v = self.model.forward(obs)
+        _, plogprob, pentropy = logits_to_actions(p, paction)
+        _, dlogprob, dentropy = logits_to_actions(d, daction)
+        return (p, plogprob, pentropy), (d, dlogprob, dentropy), v
+
+
 @hydra.main(config_path="conf", config_name="config", version_base="1.2")
 def my_app(cfg: DictConfig) -> None:
+    # print(OmegaConf.to_yaml(cfg))
     args = Args()
     random.seed(args.seed)
     np.random.seed(args.seed)
     torch.manual_seed(args.seed)
     torch.backends.cudnn.deterministic = args.torch_deterministic
 
-    lr = args.learning_rate
-    epochs = args.num_iterations
-    graphs_per_epoch = args.graphs_per_update
-
+    cfg.mapper.type = "block"
+    cfg.mapper.python = True
     devices = setup_system(cfg)
-    tasks, _data = setup_graph(cfg)
-    # Initialize a dummy simulator to get the graph features
-    # Only GPUs are used for task computations
-    H, sim = initialize_simulator(
+    tasks, data = setup_graph(cfg)
+
+    H_block, sim_block = initialize_simulator(
         cfg,
         tasks,
-        _data,
+        data,
         devices,
     )
-    candidates = sim.get_mapping_candidates()
-    local_graph = sim.observer.local_graph_features(candidates)
-    h = TaskAssignmentNetDeviceOnly(cfg.system.ngpus, args.hidden_dim, local_graph)
+    sim_block.run()
+    print(f"Block: {sim_block.get_current_time()}")
+
+    cfg.mapper.type = "eft"
+    cfg.mapper.python = False
+    devices = setup_system(cfg)
+    tasks, data = setup_graph(cfg)
+
+    H_eft, sim_eft = initialize_simulator(
+        cfg,
+        tasks,
+        data,
+        devices,
+    )
+    sim_eft.run()
+    print(f"EFT: {sim_eft.get_current_time()}")
+
+    cfg.mapper.type = "block"
+    cfg.mapper.python = True
+    devices = setup_system(cfg)
+    tasks, data = setup_graph(cfg)
+    H_rl, sim_rl = initialize_simulator(
+        cfg,
+        tasks,
+        data,
+        devices,
+    )
+    candidates = sim_rl.get_mapping_candidates()
+    local_graph = sim_rl.observer.local_graph_features(candidates)
+    h = TaskAssignmentNetDeviceOnly(4, 64, local_graph)
+    h.eval()
+    netmap = GreedyNetworkMapper(h)
+    H_rl.set_python_mapper(netmap)
     h.load_state_dict(
         torch.load(
-            "/Users/jaeyoung/work/rlgraph_experiments/outputs/ppo_Stencil_(10x10)2025-02-06 03:33:54/checkpoint_epoch_1200.pth",
+            "/Users/jaeyoung/work/rlgraph_experiments/outputs/ppo_stencil_4x142025-02-12 11:14:03/checkpoint_epoch_2700.pth",
             map_location=torch.device("cpu"),
             weights_only=True,
         )
     )
+    sim_rl = H_rl.copy(sim_rl)
+    sim_rl.set_python_mapper(netmap)
+    sim_rl.enable_python_mapper()
+    sim_rl.run()
+    print(f"RL: {sim_rl.get_current_time()}")
 
-    netmap = GreedyNetworkMapper(h)
-    H.set_python_mapper(netmap)
+    for i in range(0, 9):
+        accuracies = []
+        for p in range(0, 24):
+            cfg.dag.stencil.load_idx = i
+            cfg.dag.stencil.permute_idx = p
+            devices = setup_system(cfg)
+            tasks, _data = setup_graph(cfg)
+            H_rl, sim_rl = initialize_simulator(
+                cfg,
+                tasks,
+                _data,
+                devices,
+            )
+            H_rl.set_python_mapper(netmap)
+            sim_rl = H_rl.copy(sim_rl)
+            sim_rl.set_python_mapper(netmap)
+            sim_rl.enable_python_mapper()
+            sim_rl.run()
+            rl_time = sim_rl.get_current_time()
+            cfg.mapper.type = "eft"
+            cfg.mapper.python = False
+            H_eft, sim_eft = initialize_simulator(
+                cfg,
+                tasks,
+                _data,
+                devices,
+            )
+            sim_eft.run()
+            eft_time = sim_eft.get_current_time()
 
-    for i in range(50, 81):
-        cfg.dag.stencil.permute_idx = i
-        devices = setup_system(cfg)
-        tasks, _data = setup_graph(cfg)
-        H, sim = initialize_simulator(
-            cfg,
-            tasks,
-            _data,
-            devices,
-        )
-        H.set_python_mapper(netmap)
-        env = H.copy(sim)
-        done = False
-        baseline = H.copy(sim)
-        baseline.disable_python_mapper()
-        a = H.get_new_c_mapper()
-        baseline.set_c_mapper(a)
-        baseline_done = baseline.run()
-        eft_time = baseline.get_current_time()
-        print(eft_time)
-        # Run env to first mapping
-        env.set_python_mapper(netmap)
-        env.enable_python_mapper()
-        env.run()
-        model_time = env.get_current_time()
-        accuracy = eft_time / model_time * 100.0
-        print(f"{i}: {accuracy:.2f}%")
+            accuracy = eft_time / rl_time * 100.0
+            accuracies.append(accuracy)
+            print(f"EFT: {eft_time}, Model: {rl_time}, Accuracy: {accuracy:.2f}%")
+        print(f"{i}: {average(accuracies):.2f}%")
 
 
 if __name__ == "__main__":

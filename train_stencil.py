@@ -34,6 +34,7 @@ from task4feedback.graphs import *
 import wandb
 from datetime import datetime
 
+assignments = np.load("/Users/jaeyoung/Jupyter/stencil_optimal/assignments.npy")
 logging.disable(logging.CRITICAL)
 
 
