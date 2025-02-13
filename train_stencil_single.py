@@ -143,6 +143,9 @@ class RandomNetworkMapper(PythonMapper):
         return (p, plogprob, pentropy), (d, dlogprob, dentropy), v
 
 
+TI = 0
+
+
 @hydra.main(config_path="conf", config_name="config", version_base="1.2")
 def my_app(cfg: DictConfig) -> None:
     args = Args()
@@ -226,7 +229,21 @@ def my_app(cfg: DictConfig) -> None:
     def collect_batch(episodes, h, global_step=0):
         batch_info = []
         for e in range(0, episodes):
+            global TI
+            cfg.dag.stencil.permute_idx = TI % 24
+            TI += 1
+            print(TI)
+            tasks, _data = setup_graph(cfg)
+            H, SIM = initialize_simulator(
+                cfg,
+                tasks,
+                _data,
+                devices,
+            )
+            H.set_python_mapper(rnetmap)
             sim = H.copy(SIM)
+            sim.set_python_mapper(rnetmap)
+            sim.enable_python_mapper()
             done = False
             # Run baseline
             obs, immediate_reward, done, terminated, info = sim.step()

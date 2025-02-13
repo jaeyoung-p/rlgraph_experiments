@@ -247,7 +247,7 @@ def my_app(cfg: DictConfig) -> None:
     H_rl.set_python_mapper(netmap)
     h.load_state_dict(
         torch.load(
-            "/Users/jaeyoung/work/rlgraph_experiments/outputs/ppo_stencil_4x142025-02-12 11:14:03/checkpoint_epoch_2700.pth",
+            "/Users/jaeyoung/work/rlgraph_experiments/outputs/ppo_stencil_4x142025-02-13 00:17:39/checkpoint_epoch_3800.pth",
             map_location=torch.device("cpu"),
             weights_only=True,
         )
@@ -258,7 +258,7 @@ def my_app(cfg: DictConfig) -> None:
     sim_rl.run()
     print(f"RL: {sim_rl.get_current_time()}")
 
-    for i in range(0, 9):
+    for i in range(6, 9):
         accuracies = []
         for p in range(0, 24):
             cfg.dag.stencil.load_idx = i
