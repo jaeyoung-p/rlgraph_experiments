@@ -45,8 +45,8 @@ def setup_simulator(
     python_mapper=None,
     randomize_priorities=False,
     randomize_durations=False,
+    log=False,
 ) -> tuple[SimulatorHandler, Simulator]:
-    # start_logger()
     if cfg.env.task_noise == "None" and randomize_durations:
         raise ValueError("Cannot randomize durations without task noise")
     if cfg.env.task_noise == "None" and randomize_priorities:
@@ -54,6 +54,8 @@ def setup_simulator(
     if tasks is None or data is None or devices is None:
         devices = setup_system(cfg)
         tasks, data = setup_graph(cfg)
+    if log:
+        start_logger()
     H = SimulatorHandler(
         tasks,
         data,

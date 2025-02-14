@@ -202,34 +202,31 @@ def my_app(cfg: DictConfig) -> None:
     # )
     cfg.mapper.type = "block"
     cfg.mapper.python = True
-    # block_times = []
-    # for i in range(0, 24):
-    #     cfg.dag.stencil.permute_idx = i
-    #     h_block, sim_block = setup_simulator(cfg)
-    #     sim_block.run()
-    #     block_time = sim_block.get_current_time()
-    #     print(f"Block: {block_time}")
-    #     block_times.append(block_time)
-
-    cfg.env.task_noise = "Lognormal"
-    cfg.mapper.type = "eft"
-    cfg.mapper.python = False
-    cfg.dag.stencil.width = 10
-    cfg.dag.stencil.initial_data_placement = "block"
+    block_times = []
     for i in range(0, 24):
-        cfg.env.seed = i
-        h_eft, sim_eft = setup_simulator(cfg, randomize_priorities=True)
-        sim_eft.run()
-        eft_time = sim_eft.get_current_time()
-        print(f"EFT: {eft_time}")
+        cfg.dag.stencil.permute_idx = i
+        h_block, sim_block = setup_simulator(cfg)
+        sim_block.run()
+        block_time = sim_block.get_current_time()
+        print(f"Block: {block_time}")
+        block_times.append(block_time)
+    Hs: List[SimulatorHandler] = []
+    Sims: List[Simulator] = []
+    for i in range(0, 24):
+        cfg.dag.stencil.permute_idx = i
+        h_block, sim_block = setup_simulator(
+            cfg,
+            python_mapper=rnetmap,
+            randomize_priorities=True,
+        )
+        Hs.append(h_block)
+        Sims.append(sim_block)
 
     def collect_batch(episodes, h, global_step=0):
         batch_info = []
         for e in range(0, episodes):
-
-            H, sim = setup_simulator(
-                cfg, python_mapper=rnetmap, randomize_priorities=True
-            )
+            sim = Hs[e].copy(Sims[e])
+            sim.randomize_priorities()
             done = False
             # Run baseline
             obs, immediate_reward, done, terminated, info = sim.step()
