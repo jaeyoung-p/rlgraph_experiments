@@ -10,7 +10,7 @@ import torch_geometric.data
 import torch_geometric.loader
 from scripts.setup_system import setup_system
 from scripts.setup_graph import setup_graph
-from scripts.setup_simulator import initialize_simulator, setup_simulator
+from scripts.setup_simulator import setup_simulator
 from task4feedback.fastsim.interface import (
     PythonMapper,
     Action,
@@ -51,7 +51,7 @@ class Args:
     vf_coef: float = 0.5
     max_grad_norm: float = 0.5
     num_iterations: int = 25000
-    graphs_per_update: int = 10
+    graphs_per_update: int = 24
     reward: str = "percent_improvement"
     load_model: bool = False
 
@@ -143,14 +143,11 @@ class RandomNetworkMapper(PythonMapper):
         return (p, plogprob, pentropy), (d, dlogprob, dentropy), v
 
 
-TI = 0
-
-
 @hydra.main(config_path="conf", config_name="config", version_base="1.2")
 def my_app(cfg: DictConfig) -> None:
     args = Args()
     run_name = (
-        f"ppo_{args.env_id}_{cfg.dag.stencil.width}x{cfg.dag.stencil.steps}"
+        f"norandom_ppo_{args.env_id}_{cfg.dag.stencil.width}x{cfg.dag.stencil.steps}"
         + datetime.today().strftime("%Y-%m-%d %H:%M:%S")
     )
     if not os.path.exists("outputs"):
@@ -185,20 +182,9 @@ def my_app(cfg: DictConfig) -> None:
         },
     )
 
-    cfg.mapper.type = "block"
-    cfg.mapper.python = True
-    devices = setup_system(cfg)
-    tasks, _data = setup_graph(cfg)
-    H, SIM = initialize_simulator(
+    H, SIM = setup_simulator(
         cfg,
-        tasks,
-        _data,
-        devices,
     )
-    block_sim = H.copy(SIM)
-    block_sim.run()
-    block_time = block_sim.get_current_time()
-
     candidates = SIM.get_mapping_candidates()
     local_graph = SIM.observer.local_graph_features(candidates)
     h = TaskAssignmentNetDeviceOnly(cfg.system.ngpus + 1, args.hidden_dim, local_graph)
@@ -214,36 +200,31 @@ def my_app(cfg: DictConfig) -> None:
     #         weights_only=True,
     #     )
     # )
-    H, SIM = initialize_simulator(
-        cfg,
-        tasks,
-        _data,
-        devices,
-    )
-    H.set_python_mapper(rnetmap)
-    sim = H.copy(SIM)
-    sim.set_python_mapper(rnetmap)
-    sim.enable_python_mapper()
-    sim.run()
+    cfg.mapper.type = "block"
+    cfg.mapper.python = True
+    block_times = []
+    for i in range(0, 24):
+        cfg.dag.stencil.permute_idx = i
+        h_block, sim_block = setup_simulator(cfg)
+        sim_block.run()
+        block_time = sim_block.get_current_time()
+        print(f"Block: {block_time}")
+        block_times.append(block_time)
+    Hs = []
+    Sims = []
+    for i in range(0, 24):
+        cfg.dag.stencil.permute_idx = i
+        h_block, sim_block = setup_simulator(
+            cfg,
+            python_mapper=rnetmap,
+        )
+        Hs.append(h_block)
+        Sims.append(sim_block)
 
     def collect_batch(episodes, h, global_step=0):
         batch_info = []
         for e in range(0, episodes):
-            global TI
-            cfg.dag.stencil.permute_idx = TI % 24
-            TI += 1
-            print(TI)
-            tasks, _data = setup_graph(cfg)
-            H, SIM = initialize_simulator(
-                cfg,
-                tasks,
-                _data,
-                devices,
-            )
-            H.set_python_mapper(rnetmap)
-            sim = H.copy(SIM)
-            sim.set_python_mapper(rnetmap)
-            sim.enable_python_mapper()
+            sim = Hs[e].copy(Sims[e])
             done = False
             # Run baseline
             obs, immediate_reward, done, terminated, info = sim.step()
@@ -260,7 +241,7 @@ def my_app(cfg: DictConfig) -> None:
                 episode_info.append(record)
 
                 if done:
-                    baseline = block_time
+                    baseline = block_times[e]
 
                     if args.reward == "percent_improvement":
                         record["reward"] = 1 + (baseline - record["time"]) / baseline
@@ -274,7 +255,7 @@ def my_app(cfg: DictConfig) -> None:
                         else:
                             record["reward"] = 0
 
-                    print(f"{record['reward']}, {record['time']}, Block:{block_time}")
+                    print(f"{record['reward']}, {record['time']}, Block:{baseline}")
                     break
 
                 else:
