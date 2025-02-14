@@ -212,6 +212,7 @@ def my_app(cfg: DictConfig) -> None:
         block_times.append(block_time)
     Hs: List[SimulatorHandler] = []
     Sims: List[Simulator] = []
+    cfg.env.task_noise = "Lognormal"
     for i in range(0, 24):
         cfg.dag.stencil.permute_idx = i
         h_block, sim_block = setup_simulator(
