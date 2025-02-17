@@ -10,7 +10,7 @@ import torch_geometric.data
 import torch_geometric.loader
 from scripts.setup_system import setup_system
 from scripts.setup_graph import setup_graph
-from scripts.setup_simulator import initialize_simulator, setup_simulator
+from scripts.setup_simulator import setup_simulator
 from task4feedback.fastsim.interface import (
     PythonMapper,
     Action,
@@ -34,88 +34,31 @@ from task4feedback.graphs import *
 import wandb
 from datetime import datetime
 
-assignments = np.load("/Users/jaeyoung/Jupyter/stencil_optimal/assignments.npy")
 logging.disable(logging.CRITICAL)
+
+LEVELS = -1
 
 
 @dataclass
 class Args:
     hidden_dim = 64
-    exp_name: str = os.path.basename(__file__)[: -len(".py")]
-    """the name of this experiment"""
     seed: int = 1
-    """seed of the experiment"""
     torch_deterministic: bool = True
-    """if toggled, `torch.backends.cudnn.deterministic=False`"""
-    cuda: bool = True
-    """if toggled, cuda will be enabled by default"""
-    track: bool = False
-    """if toggled, this experiment will be tracked with Weights and Biases"""
-    wandb_project_name: str = "cleanRL"
-    """the wandb's project name"""
-    wandb_entity: str = None
-    """the entity (team) of wandb's project"""
-    capture_video: bool = False
-    """whether to capture videos of the agent performances (check out `videos` folder)"""
-
-    # Algorithm specific arguments
-    env_id: str = "CartPole-v1"
-    """the id of the environment"""
-    total_timesteps: int = 500000
-    """total timesteps of the experiments"""
+    env_id: str = "stencil"
     learning_rate: float = 2.5e-4
-    """the learning rate of the optimizer"""
-    num_envs: int = 4
-    """the number of parallel game environments"""
-    num_steps: int = 128
-    """the number of steps to run in each environment per policy rollout"""
-    anneal_lr: bool = True
-    """Toggle learning rate annealing for policy and value networks"""
-    gamma: float = 1
-    """the discount factor gamma"""
-    gae_lambda: float = 1
-    """the lambda for the general advantage estimation"""
     num_minibatches: int = 4
-    """the number of mini-batches"""
     update_epochs: int = 4
-    """the K epochs to update the policy"""
-    norm_adv: bool = True
-    """Toggles advantages normalization"""
     clip_coef: float = 0.2
-    """the surrogate clipping coefficient"""
-    clip_vloss: bool = True
-    """Toggles whether or not to use a clipped loss for the value function, as per the paper."""
     ent_coef: float = 0.001
-    """coefficient of the entropy"""
     vf_coef: float = 0.5
-    """coefficient of the value function"""
     max_grad_norm: float = 0.5
-    """the maximum norm for the gradient clipping"""
-    target_kl: float = None
-    """the target KL divergence threshold"""
-
-    # to be filled in runtime
-    batch_size: int = 0
-    """the batch size (computed in runtime)"""
-    minibatch_size: int = 0
-    """the mini-batch size (computed in runtime)"""
-    num_iterations: int = 1280
-    """the number of iterations (computed in runtime)"""
-
-    graphs_per_update: int = 10
-    """the number of graphs to use for each update"""
+    num_iterations: int = 25000
+    graphs_per_update: int = 24
     reward: str = "percent_improvement"
     load_model: bool = False
 
 
-total_runs = 0
-LI = 0
-
-
 def init_weights(m):
-    """
-    Initializes LayerNorm layers.
-    """
     if isinstance(m, torch.nn.LayerNorm):
         torch.nn.init.constant_(m.weight, 1.0)
         torch.nn.init.constant_(m.bias, 0.0)
@@ -204,128 +147,130 @@ class RandomNetworkMapper(PythonMapper):
 
 @hydra.main(config_path="conf", config_name="config", version_base="1.2")
 def my_app(cfg: DictConfig) -> None:
-    run_name = f"ppo_Stencil_(10x10)" + datetime.today().strftime("%Y-%m-%d %H:%M:%S")
+    args = Args()
+    run_name = (
+        f"ppo_{args.env_id}_{cfg.dag.stencil.width}x{cfg.dag.stencil.steps}"
+        + datetime.today().strftime("%Y-%m-%d %H:%M:%S")
+    )
+    if not os.path.exists("outputs"):
+        os.makedirs("outputs")
     if not os.path.exists(f"outputs/{run_name}"):
         os.makedirs(f"outputs/{run_name}")
 
-    args = Args()
     random.seed(args.seed)
     np.random.seed(args.seed)
     torch.manual_seed(args.seed)
     torch.backends.cudnn.deterministic = args.torch_deterministic
 
     wandb.init(
-        project="Stencil Adversarial Data Placement",
+        project="Stencil Adversarial Data Placement General",
         name=run_name,
         config={
             "env_id": args.env_id,
-            "total_timesteps": args.total_timesteps,
             "learning_rate": args.learning_rate,
-            "num_envs": args.num_envs,
-            "num_steps": args.num_steps,
-            "gamma": args.gamma,
-            "gae_lambda": args.gae_lambda,
             "num_minibatches": args.num_minibatches,
             "update_epochs": args.update_epochs,
-            "norm_adv": args.norm_adv,
             "clip_coef": args.clip_coef,
-            "clip_vloss": args.clip_vloss,
             "ent_coef": args.ent_coef,
             "vf_coef": args.vf_coef,
             "max_grad_norm": args.max_grad_norm,
-            "target_kl": args.target_kl,
-            "batch_size": args.batch_size,
-            "minibatch_size": args.minibatch_size,
             "num_iterations": args.num_iterations,
             "graphs_per_update": args.graphs_per_update,
             "reward": args.reward,
             "devices": cfg.system.ngpus,
             "vcus": 1,
             "blocks": cfg.dag.stencil.width,
+            "steps": cfg.dag.stencil.steps,
         },
     )
 
-    lr = args.learning_rate
-    epochs = args.num_iterations
-    graphs_per_epoch = args.graphs_per_update
-
-    devices = setup_system(cfg)
-    tasks, _data = setup_graph(cfg)
-    # Initialize a dummy simulator to get the graph features
-    # Only GPUs are used for task computations
-    H, sim = initialize_simulator(
+    H, SIM = setup_simulator(
         cfg,
-        tasks,
-        _data,
-        devices,
     )
-    candidates = sim.get_mapping_candidates()
-    local_graph = sim.observer.local_graph_features(candidates)
-    h = TaskAssignmentNetDeviceOnly(cfg.system.ngpus, args.hidden_dim, local_graph)
-    optimizer = torch.optim.Adam(h.parameters(), lr=lr)
+    candidates = SIM.get_mapping_candidates()
+    local_graph = SIM.observer.local_graph_features(candidates)
+    h = TaskAssignmentNetDeviceOnly(cfg.system.ngpus + 1, args.hidden_dim, local_graph)
+    optimizer = torch.optim.Adam(h.parameters(), lr=args.learning_rate)
     rnetmap = RandomNetworkMapper(h)
     H.set_python_mapper(rnetmap)
 
     h.apply(init_weights)
+    # h.load_state_dict(
+    #     torch.load(
+    #         "/Users/jaeyoung/work/rlgraph_experiments/outputs/ppo_stencil_4x142025-02-12 11:14:03/checkpoint_epoch_2700.pth",
+    #         map_location=torch.device("cpu"),
+    #         weights_only=True,
+    #     )
+    # )
+    cfg.mapper.type = "block"
+    cfg.mapper.python = True
+    block_times: List[List[int]] = [] * 9
+    for level in range(0, 9):
+        for i in range(0, 24):
+            cfg.dag.stencil.load_idx = level
+            cfg.dag.stencil.permute_idx = i
+            h_block, sim_block = setup_simulator(cfg)
+            sim_block.run()
+            block_time = sim_block.get_current_time()
+            print(f"Block: {block_time}")
+            block_times[level].append(block_time)
+    Hs: List[List[SimulatorHandler]] = [] * 9
+    Sims: List[List[Simulator]] = [] * 9
+    cfg.env.task_noise = "Lognormal"
+    for level in range(0, 9):
+        for i in range(0, 24):
+            cfg.dag.stencil.load_idx = level
+            cfg.dag.stencil.permute_idx = i
+            h_block, sim_block = setup_simulator(
+                cfg,
+                python_mapper=rnetmap,
+                randomize_priorities=True,
+            )
+            Hs[level].append(h_block)
+            Sims[level].append(sim_block)
 
     def collect_batch(episodes, h, global_step=0):
         batch_info = []
+        global LEVELS
+        LEVELS += 1
+        if LEVELS == 9:
+            LEVELS = 0
         for e in range(0, episodes):
-            global total_runs
-            cfg.dag.stencil.permute_idx = total_runs
-            total_runs += 1
-            devices = setup_system(cfg)
-            tasks, _data = setup_graph(cfg)
-            H, sim = initialize_simulator(
-                cfg,
-                tasks,
-                _data,
-                devices,
-            )
-            H.set_python_mapper(rnetmap)
-            env = H.copy(sim)
+            sim = Hs[LEVELS][e].copy(Sims[LEVELS][e])
+            sim.randomize_priorities()
             done = False
-
             # Run baseline
-            baseline = H.copy(sim)
-            baseline.disable_python_mapper()
-            a = H.get_new_c_mapper()
-            baseline.set_c_mapper(a)
-            baseline_done = baseline.run()
-            eft_time = baseline.get_current_time()
-            print(eft_time)
-            # Run env to first mapping
-            env.enable_python_mapper()
-            obs, immediate_reward, done, terminated, info = env.step()
-            print(done)
+            obs, immediate_reward, done, terminated, info = sim.step()
             episode_info = []
 
             while not done:
-                candidates = env.get_mapping_candidates()
+                candidates = sim.get_mapping_candidates()
                 record = {}
-                action_list = RandomNetworkMapper(h).map_tasks(candidates, env, record)
+                action_list = RandomNetworkMapper(h).map_tasks(candidates, sim, record)
 
-                obs, immediate_reward, done, terminated, info = env.step(action_list)
+                obs, immediate_reward, done, terminated, info = sim.step(action_list)
                 record["done"] = done
-                record["time"] = env.get_current_time()
+                record["time"] = sim.get_current_time()
                 episode_info.append(record)
 
                 if done:
+                    baseline = block_times[LEVELS][e]
+
                     if args.reward == "percent_improvement":
-                        percent_improvement = 1 + (eft_time - record["time"]) / eft_time
-                        percent_improvement = percent_improvement
-                        record["reward"] = percent_improvement
+                        record["reward"] = 1 + (baseline - record["time"]) / baseline
+                    elif args.reward == "exp":
+                        record["reward"] = (
+                            math.exp((baseline - record["time"]) / baseline) - 1
+                        )
                     elif args.reward == "better":
-                        if record["time"] < eft_time:
+                        if record["time"] < baseline:
                             record["reward"] = 1
                         else:
                             record["reward"] = 0
 
-                    wandb.log(
-                        {"episode_reward": record["reward"]},
-                    )
-
+                    print(f"{record['reward']}, {record['time']}, Block:{baseline}")
                     break
+
                 else:
                     record["reward"] = 0
 
@@ -337,16 +282,16 @@ def my_app(cfg: DictConfig) -> None:
                     )
 
             batch_info.extend(episode_info)
+
         return batch_info
 
     def batch_update(batch_info, update_epoch, h, optimizer, global_step):
         n_obs = len(batch_info)
 
-        batch_size = args.batch_size
-
         dclipfracs = []
 
         state = []
+        total_rewards = 0
         for i in range(n_obs):
             state.append(batch_info[i]["state"])
             state[i]["dlogprob"] = batch_info[i]["dlogprob"]
@@ -354,14 +299,11 @@ def my_app(cfg: DictConfig) -> None:
             state[i]["dactions"] = batch_info[i]["dactions"]
             state[i]["advantage"] = batch_info[i]["advantage"]
             state[i]["returns"] = batch_info[i]["returns"]
-
-        global LI
+            total_rewards += batch_info[i]["returns"]
 
         for k in range(update_epoch):
-            nbatches = args.num_minibatches
-            batch_size = n_obs // nbatches
             loader = torch_geometric.loader.DataLoader(
-                state, batch_size=batch_size, shuffle=True
+                state, batch_size=(n_obs // args.num_minibatches), shuffle=True
             )
 
             for i, batch in enumerate(loader):
@@ -419,23 +361,22 @@ def my_app(cfg: DictConfig) -> None:
                         "losses/value_loss": v_loss.item(),
                         "losses/entropy": entropy_loss.item(),
                         "losses/dentropy": dentropy.mean().item(),
-                    },
-                )
-                wandb.log(
-                    {
                         "losses/dratio": dratio.mean().item(),
                         "losses/dpolicy_loss": dpg_loss.item(),
                         "losses/dold_approx_kl": dold_approx_kl.item(),
                         "losses/dapprox_kl": dapprox_kl.item(),
                         "losses/dclipfrac": np.mean(dclipfracs),
                     },
+                    commit=False,
                 )
-                LI = LI + 1
+        wandb.log(
+            {"episode_reward": total_rewards / n_obs},
+        )
 
     for epoch in range(args.num_iterations):
         print("Epoch: ", epoch)
 
-        batch_info = collect_batch(graphs_per_epoch, h, global_step=epoch)
+        batch_info = collect_batch(args.graphs_per_update, h, global_step=epoch)
         batch_update(batch_info, args.update_epochs, h, optimizer, global_step=epoch)
 
         # --- Gradient Monitoring ---
