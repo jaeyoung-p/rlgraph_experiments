@@ -163,7 +163,7 @@ def my_app(cfg: DictConfig) -> None:
     torch.backends.cudnn.deterministic = args.torch_deterministic
 
     wandb.init(
-        project="Stencil Adversarial Data Placement General",
+        project="Stencil Adversarial Data Placement General Rand(p)",
         name=run_name,
         config={
             "env_id": args.env_id,
@@ -204,7 +204,7 @@ def my_app(cfg: DictConfig) -> None:
     # )
     cfg.mapper.type = "block"
     cfg.mapper.python = True
-    block_times: List[List[int]] = [] * 9
+    block_times: List[List[int]] = [[] for _ in range(0, 9)]
     for level in range(0, 9):
         for i in range(0, 24):
             cfg.dag.stencil.load_idx = level
@@ -214,8 +214,8 @@ def my_app(cfg: DictConfig) -> None:
             block_time = sim_block.get_current_time()
             print(f"Block: {block_time}")
             block_times[level].append(block_time)
-    Hs: List[List[SimulatorHandler]] = [] * 9
-    Sims: List[List[Simulator]] = [] * 9
+    Hs: List[List[SimulatorHandler]] = [[] for _ in range(0, 9)]
+    Sims: List[List[Simulator]] = [[] for _ in range(0, 9)]
     cfg.env.task_noise = "Lognormal"
     for level in range(0, 9):
         for i in range(0, 24):
