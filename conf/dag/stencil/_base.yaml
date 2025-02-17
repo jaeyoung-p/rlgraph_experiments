@@ -1,5 +1,5 @@
-width: 4
-steps: 14
+width: 8
+steps: 100
 dimension: 2
 interior_size: 25000000
 boundary_scale: 5
@@ -7,6 +7,6 @@ data_scale: 10
 interior_comm: 1 
 boundary_comm: 1
 initial_data_placement: load
-placement_file_location: assignments_4.npy
-load_idx: 8
+placement_file_location: assignments_8.npy
+load_idx: 48
 permute_idx: 0

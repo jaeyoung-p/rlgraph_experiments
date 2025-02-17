@@ -17,13 +17,9 @@ def my_app(cfg: DictConfig) -> None:
     # print hydra job name
     print(HydraConfig.get().job.name)
 
-    devices = setup_system(cfg)
-    tasks, data = setup_graph(cfg)
-    simulator = setup_simulator(
+    _, simulator = setup_simulator(
         cfg,
-        tasks,
-        data,
-        devices,
+        log=True,
     )
     run(cfg, simulator)
 

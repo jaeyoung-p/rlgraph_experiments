@@ -104,7 +104,7 @@ def stencil_block(cfg, tasks, data):
     def task_to_device(task_id: TaskID) -> Device:
         import itertools
 
-        all_combinations = itertools.permutations(range(4))
+        all_combinations = [list(c) for c in itertools.permutations(range(4))]
         if cfg.system.ngpus == 3:
             ngpus = 4
         else:
