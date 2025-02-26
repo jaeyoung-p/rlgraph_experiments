@@ -88,37 +88,37 @@ def my_app(cfg: DictConfig) -> None:
     np.random.seed(cfg.env.seed)
     torch.manual_seed(cfg.env.seed)
     torch.backends.cudnn.deterministic = True
-    _H, _sim = setup_simulator(cfg)
-    candidates = _sim.get_mapping_candidates()
-    local_graph = _sim.observer.local_graph_features(candidates)
-    h = TaskAssignmentNetDeviceOnly(4, 64, local_graph)
-    h.eval()
-    h.load_state_dict(
-        torch.load(
-            "saved_models/stencil_4x4_14steps_single_scenario_norand_nopermute.pth",
-            map_location=torch.device("cpu"),
-            weights_only=True,
-        )
-    )
-    netmap = GreedyNetworkMapper(h)
-
-    H, sim = setup_simulator(
-        cfg,
-        python_mapper=netmap,
-        # log=True,
-    )
-    sim = H.copy(sim)
-    sim.set_python_mapper(netmap)
-    sim.enable_python_mapper()
-
+    print("Running simulation...")
     if run_mode == "RL":
+        _H, _sim = setup_simulator(cfg)
+        candidates = _sim.get_mapping_candidates()
+        local_graph = _sim.observer.local_graph_features(candidates)
+        h = TaskAssignmentNetDeviceOnly(4, 64, local_graph)
+        h.eval()
+        h.load_state_dict(
+            torch.load(
+                "/Users/jaeyoung/work/rlgraph_experiments/saved_models/stencil_4x4_14steps_all_scenario_all_permute_rand(prior).pth",
+                map_location=torch.device("cpu"),
+                weights_only=True,
+            )
+        )
+        netmap = GreedyNetworkMapper(h)
+
+        H, sim = setup_simulator(
+            cfg,
+            python_mapper=netmap,
+            # log=True,
+        )
+        sim = H.copy(sim)
+        sim.set_python_mapper(netmap)
+        sim.enable_python_mapper()
         sim.run()
     elif run_mode == "EFT":
-        sim = _sim  # Running EFT Comment out if running RL
+        H, sim = setup_simulator(cfg)
         sim.run()
     else:
         raise ValueError("Unknown run mode: {}".format(run_mode))
-
+    print("Simulation complete.")
     # Get the grid dimensions and number of steps from the config
     width = cfg.dag.stencil.width  # grid width (and height)
     num_steps = cfg.dag.stencil.steps  # number of steps
@@ -178,12 +178,11 @@ def my_app(cfg: DictConfig) -> None:
             draw.text((10, 10), f"Step: {step}", fill=(0, 0, 0))
 
             frames.append(np.array(pil_img))
-        print(f"Step {step}: {boundary_cross} boundary crossings.")
 
     # ---------------------------
     # Create a composite image showing each step's mapping result in a grid (5 columns) with margins
     # ---------------------------
-    output_dir = "outputs"
+    output_dir = "images"
     os.makedirs(output_dir, exist_ok=True)
 
     if plot_composite:
@@ -210,7 +209,10 @@ def my_app(cfg: DictConfig) -> None:
             y_offset = margin + row_idx * (frame_height + margin)
             composite_img.paste(frame_img, (x_offset, y_offset))
 
-        composite_path = os.path.join(output_dir, f"snapshot_{run_mode}.png")
+        composite_path = os.path.join(
+            output_dir,
+            f"snapshot_{run_mode}_{width}x{width}_{num_steps}_min_{cfg.dag.stencil.permute_idx}.png",
+        )
         composite_img.save(composite_path)
         print(f"Saved composite snapshot mapping image to {composite_path}")
 
@@ -218,15 +220,27 @@ def my_app(cfg: DictConfig) -> None:
     # Plot the line graph for boundary crossings vs. step
     # ---------------------------
     plt.figure(figsize=(8, 4))
-    plt.plot(range(num_steps), boundary_counts, marker="o", linestyle="-")
+    plt.plot(range(num_steps), boundary_counts, linestyle="-")
     plt.xlabel("Step")
     plt.ylabel("Number of Boundary Crossings")
     plt.title("Boundary Crossings per Step")
     plt.grid(True)
-    line_plot_path = os.path.join(output_dir, f"boundary_crossings_{run_mode}.png")
+    plt.plot(range(num_steps), boundary_counts, linestyle="-")
+    plt.axhline(
+        y=2 * width,
+        color="red",
+        linewidth=3,
+        label=f"Min Boundary Crossing ({2*width})",
+    )
+    plt.legend()
+    line_plot_path = os.path.join(
+        output_dir,
+        f"line_{run_mode}_{width}x{width}_{num_steps}.png",
+    )
     plt.savefig(line_plot_path)
     plt.close()
     print(f"Saved boundary crossing plot to {line_plot_path}")
+    print(sim.get_current_time())
 
 
 if __name__ == "__main__":

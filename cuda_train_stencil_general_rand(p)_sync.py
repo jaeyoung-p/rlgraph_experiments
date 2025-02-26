@@ -149,7 +149,7 @@ def my_app(cfg: DictConfig) -> None:
     torch.backends.cudnn.deterministic = args.torch_deterministic
 
     wandb.init(
-        project="Stencil Adversarial Data Placement General Rand(p)",
+        project="Stencil Adversarial Data Placement General Rand(p) Sync",
         name=run_name,
         config={
             "env_id": args.env_id,

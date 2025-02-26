@@ -71,10 +71,12 @@ class GreedyNetworkMapper(PythonMapper):
 
 @hydra.main(config_path="conf", config_name="config", version_base="1.2")
 def my_app(cfg: DictConfig) -> None:
-    random.seed(cfg.env.seed)
-    np.random.seed(cfg.env.seed)
-    torch.manual_seed(cfg.env.seed)
+    random.seed(0)
+    np.random.seed(0)
+    torch.manual_seed(0)
+    randomness = 10
     torch.backends.cudnn.deterministic = True
+    cfg.env.task_noise = "Lognormal"
     H_rl, sim_rl = setup_simulator(
         cfg,
     )
@@ -84,48 +86,48 @@ def my_app(cfg: DictConfig) -> None:
     h.eval()
     h.load_state_dict(
         torch.load(
-            "/Users/jaeyoung/work/rlgraph_experiments/checkpoint_epoch_3700.pth",
+            "./saved_models/stencil_4x4_14steps_all_scenario_all_permute_rand(prior).pth",
             map_location=torch.device("cpu"),
             weights_only=True,
         )
     )
     netmap = GreedyNetworkMapper(h)
     results: Dict[str, List[float]] = {}
+    runs = 0
     for i in range(0, 9):
         results[str(i)] = []
         for p in range(0, 24):
             cfg.dag.stencil.load_idx = i
             cfg.dag.stencil.permute_idx = p
-            devices = setup_system(cfg)
-            tasks, _data = setup_graph(cfg)
-            H_rl, sim_rl = setup_simulator(
-                cfg,
+            H_rl, sim_rl_base = setup_simulator(
+                cfg, python_mapper=netmap, randomize_priorities=True
             )
             H_rl.set_python_mapper(netmap)
-            sim_rl = H_rl.copy(sim_rl)
-            sim_rl.set_python_mapper(netmap)
-            sim_rl.enable_python_mapper()
-            sim_rl.run()
-            rl_time = sim_rl.get_current_time()
-            cfg.mapper.type = "eft"
-            cfg.mapper.python = False
-            H_eft, sim_eft = setup_simulator(
-                cfg,
-            )
-            sim_eft.run()
-            eft_time = sim_eft.get_current_time()
+            for r in range(randomness):
+                sim_rl = H_rl.copy(sim_rl_base)
+                sim_rl.randomize_priorities()
+                sim_eft = H_rl.copy(sim_rl)
+                sim_rl.set_python_mapper(netmap)
+                sim_rl.enable_python_mapper()
+                sim_rl.run()
+                rl_time = sim_rl.get_current_time()
+                sim_eft.disable_python_mapper()
+                sim_eft.run()
+                eft_time = sim_eft.get_current_time()
 
-            accuracy = eft_time / rl_time * 100.0 - 100.0
-            results[str(i)].append(accuracy)
-            print(f"EFT: {eft_time}, Model: {rl_time}, Accuracy: {accuracy:.2f}%")
-        print(f"{i}: {average(results[str(i)]):.2f}%")
+                accuracy = eft_time / rl_time * 100.0 - 100.0
+                results[str(i)].append(accuracy)
+                runs += 1
+                print(
+                    f"{i}/{p} Speedup: {accuracy:.2f}%, {runs/(9*24*randomness)*100.0:.2f}% done"
+                )
 
     save_boxplot(
         results,
         "Stencil Boundary Crossings Level",
         "Speedup (%)",
         12,
-        "stencil_accuracy.png",
+        f"stencil_accuracy_{cfg.dag.stencil.steps}.png",
     )
 
 

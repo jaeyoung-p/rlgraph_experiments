@@ -41,8 +41,6 @@ from typing import Tuple, List
 
 logging.disable(logging.CRITICAL)
 
-LEVELS = -1
-
 
 @dataclass
 class Args:
@@ -134,6 +132,21 @@ def my_app(cfg: DictConfig) -> None:
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Using device: {device}")
 
+    print("Overriding Hydra configuration manually in the code")
+    cfg.env.task_noise = "Lognormal"
+    cfg.dag.stencil.width = 4
+    cfg.dag.stencil.steps = 14
+    cfg.dag.stencil.dimension = 2
+    cfg.dag.stencil.interior_size = 25000000
+    cfg.dag.stencil.boundary_scale = 5
+    cfg.dag.stencil.data_scale = 10
+    cfg.dag.stencil.interior_comm = 1
+    cfg.dag.stencil.boundary_comm = 1
+    cfg.dag.stencil.initial_data_placement = "load"
+    cfg.dag.stencil.placement_file_location = "assignments_4.npy"
+    cfg.dag.stencil.load_idx = 8
+    cfg.dag.stencil.permute_idx = 0
+
     run_name = (
         f"ppo_{args.env_id}_{cfg.dag.stencil.width}x{cfg.dag.stencil.steps}"
         + datetime.today().strftime("%Y-%m-%d %H:%M:%S")
@@ -149,7 +162,7 @@ def my_app(cfg: DictConfig) -> None:
     torch.backends.cudnn.deterministic = args.torch_deterministic
 
     wandb.init(
-        project="Stencil Adversarial Data Placement General Rand(p)",
+        project="Stencil Adversarial Data Placement Single Rand(p) Sync",
         name=run_name,
         config={
             "env_id": args.env_id,
@@ -185,41 +198,14 @@ def my_app(cfg: DictConfig) -> None:
     h.apply(init_weights)
     # h.load_state_dict(...)  # Loading model if needed
 
-    cfg.mapper.type = "block"
-    cfg.mapper.python = True
-    block_times: List[List[int]] = [[] for _ in range(0, 9)]
-    for level in range(0, 9):
-        for i in range(0, 24):
-            cfg.dag.stencil.load_idx = level
-            cfg.dag.stencil.permute_idx = i
-            h_block, sim_block = setup_simulator(cfg)
-            sim_block.run()
-            block_time = sim_block.get_current_time()
-            print(f"Block: {block_time}")
-            block_times[level].append(block_time)
-    Hs: List[List[SimulatorHandler]] = [[] for _ in range(0, 9)]
-    Sims: List[List[Simulator]] = [[] for _ in range(0, 9)]
-    cfg.env.task_noise = "Lognormal"
-    for level in range(0, 9):
-        for i in range(0, 24):
-            cfg.dag.stencil.load_idx = level
-            cfg.dag.stencil.permute_idx = i
-            h_block, sim_block = setup_simulator(
-                cfg,
-                python_mapper=rnetmap,
-                randomize_priorities=True,
-            )
-            Hs[level].append(h_block)
-            Sims[level].append(sim_block)
+    hBase, simBase = setup_simulator(
+        cfg, python_mapper=rnetmap, randomize_priorities=True
+    )
 
     def collect_batch(episodes, h, global_step=0):
         batch_info = []
-        global LEVELS
-        LEVELS += 1
-        if LEVELS == 9:
-            LEVELS = 0
         for e in range(0, episodes):
-            sim = Hs[LEVELS][e].copy(Sims[LEVELS][e])
+            sim = hBase.copy(simBase)
             sim.randomize_priorities()
             done = False
             # Run baseline
@@ -228,41 +214,59 @@ def my_app(cfg: DictConfig) -> None:
 
             while not done:
                 candidates = sim.get_mapping_candidates()
-                record = {}
-                action_list = RandomNetworkMapper(h).map_tasks(candidates, sim, record)
+                candidates_id: List[TaskID] = [
+                    hBase.task_handle.get_task_id(c) for c in candidates
+                ]
+                if len(candidates_id) == 1 and candidates_id[0].taskspace == "S":
+                    # Step = range(0, cfg.dag.stencil.steps)
+                    finished_step = candidates_id[0].task_idx[0]
+                    # Skip Sync task
+                    obs, immediate_reward, done, terminated, info = sim.step(
+                        [Action(candidates[0], 0, 0, 0, 0)]
+                    )
+                    # Calculate rewards
+                    baseline = (
+                        (finished_step + 1)
+                        * cfg.dag.stencil.width
+                        * cfg.dag.stencil.width
+                        * 1000  # 1000 is the time for each task
+                        / 4
+                    )
 
-                obs, immediate_reward, done, terminated, info = sim.step(action_list)
-                record["done"] = done
-                record["time"] = sim.get_current_time()
-                episode_info.append(record)
+                    current_time = sim.get_current_time()
+
+                    reward = 1 + (baseline - current_time) / baseline
+                    # Penalize/incentify harder when closer to the end
+                    reward *= (finished_step / cfg.dag.stencil.steps) ** 3
+
+                    numTasks = cfg.dag.stencil.width * cfg.dag.stencil.width
+                    with torch.no_grad():
+                        for t in range(len(episode_info) - numTasks, len(episode_info)):
+                            episode_info[t]["returns"] = reward
+                            episode_info[t]["advantage"] = (
+                                reward - episode_info[t]["value"]
+                            )
+                else:  # Normal task with taskspace of "T"
+                    record = {}
+                    action_list = RandomNetworkMapper(h).map_tasks(
+                        candidates, sim, record
+                    )
+
+                    obs, immediate_reward, done, terminated, info = sim.step(
+                        action_list
+                    )
+                    record["time"] = sim.get_current_time()
+                    episode_info.append(record)
 
                 if done:
-                    baseline = block_times[LEVELS][e]
-
-                    if args.reward == "percent_improvement":
-                        record["reward"] = 1 + (baseline - record["time"]) / baseline
-                    elif args.reward == "exp":
-                        record["reward"] = (
-                            math.exp((baseline - record["time"]) / baseline) - 1
-                        )
-                    elif args.reward == "better":
-                        if record["time"] < baseline:
-                            record["reward"] = 1
-                        else:
-                            record["reward"] = 0
-
-                    print(f"{record['reward']}, {record['time']}, Block:{baseline}")
-                    break
-
-                else:
-                    record["reward"] = 0
-
-            with torch.no_grad():
-                for t in range(len(episode_info)):
-                    episode_info[t]["returns"] = episode_info[-1]["reward"]
-                    episode_info[t]["advantage"] = (
-                        episode_info[-1]["reward"] - episode_info[t]["value"]
+                    print(
+                        f"{reward}, {current_time}/{baseline} -> {100.0 * baseline / current_time:.2f}%"
                     )
+                    wandb.log(
+                        {"performace": baseline / current_time},
+                        commit=False,
+                    )
+                    break
 
             batch_info.extend(episode_info)
 

@@ -163,6 +163,16 @@ def setup_stencil(cfg) -> Tuple[Mapping[TaskID, TaskInfo], Dict[DataID, DataInfo
 
     def task_config(task_id: TaskID) -> TaskPlacementInfo:
         placement_info = TaskPlacementInfo()
+        if task_id.taskspace == "S":
+            placement_info.add(
+                (Device(Architecture.CPU, -1),),
+                TaskRuntimeInfo(task_time=0, device_fraction=1),
+            )
+            placement_info.add(
+                (Device(Architecture.GPU, -1),),
+                TaskRuntimeInfo(task_time=0, device_fraction=1),
+            )
+            return placement_info
         if cfg.system.ngpus == 3:
             placement_info.add(
                 (Device(Architecture.CPU, -1),),
@@ -178,9 +188,11 @@ def setup_stencil(cfg) -> Tuple[Mapping[TaskID, TaskInfo], Dict[DataID, DataInfo
 
     config = StencilConfig(
         steps=cfg.dag.stencil.steps,
-        width=data_config.width,
-        dimensions=data_config.dimensions,
+        width=cfg.dag.stencil.width,
+        dimensions=cfg.dag.stencil.dimension,
         task_config=task_config,
+        reduction=cfg.dag.stencil.reduction,
+        keep_task_dependencies=cfg.dag.stencil.keep_task_dependencies,
     )
     tasks, data = make_graph(config, data_config=data_config)
 

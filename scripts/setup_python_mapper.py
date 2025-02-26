@@ -102,6 +102,11 @@ def stencil_rowcyclic(cfg, tasks, data):
 def stencil_block(cfg, tasks, data):
 
     def task_to_device(task_id: TaskID) -> Device:
+        if task_id.taskspace == "S":
+            if cfg.system.ngpus == 3:
+                return Device(Architecture.CPU, 0)
+            else:
+                return Device(Architecture.GPU, 0)
         import itertools
 
         all_combinations = [list(c) for c in itertools.permutations(range(4))]

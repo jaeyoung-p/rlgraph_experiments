@@ -33,11 +33,6 @@ from task4feedback.types import (
 from task4feedback.graphs import *
 import wandb
 from datetime import datetime
-from dataclasses import dataclass
-import random
-import numpy as np
-import math
-from typing import Tuple, List
 
 logging.disable(logging.CRITICAL)
 
@@ -78,6 +73,34 @@ def logits_to_actions(
     return action, probs.log_prob(action), probs.entropy()
 
 
+class GreedyNetworkMapper(PythonMapper):
+    def __init__(self, model):
+        self.model = model
+
+    def map_tasks(self, candidates: np.ndarray[np.int32], simulator):
+        data = simulator.observer.local_graph_features(candidates, k_hop=1)
+        with torch.no_grad():
+            d, v = self.model.forward(data)
+            # Choose argmax of network output for priority and device assignment
+            dev_per_task = torch.argmax(d, dim=-1)
+            action_list = []
+            for i in range(len(candidates)):
+                # Check if p_per_task and dev_per_task are scalars
+                if dev_per_task.dim() == 0:
+                    dev_task = dev_per_task.item()
+                else:
+                    dev_task = dev_per_task[i].item()
+                a = Action(
+                    candidates[i],
+                    i,
+                    dev_task,
+                    0,
+                    0,
+                )
+                action_list.append(a)
+        return action_list
+
+
 class RandomNetworkMapper(PythonMapper):
 
     def __init__(self, model):
@@ -85,9 +108,6 @@ class RandomNetworkMapper(PythonMapper):
 
     def map_tasks(self, candidates: np.ndarray[np.int32], simulator, output=None):
         data = simulator.observer.local_graph_features(candidates, k_hop=1)
-        # Ensure data is on the same device as the model
-        device = next(self.model.parameters()).device
-        data = data.to(device)
 
         with torch.no_grad():
             self.model.eval()
@@ -106,6 +126,7 @@ class RandomNetworkMapper(PythonMapper):
 
             action_list = []
             for i in range(len(candidates)):
+
                 a = Action(
                     candidates[i],
                     i,
@@ -113,13 +134,11 @@ class RandomNetworkMapper(PythonMapper):
                     0,
                     0,
                 )
+
                 action_list.append(a)
         return action_list
 
     def evaluate(self, obs, daction, paction):
-        # Move obs to the model's device
-        device = next(self.model.parameters()).device
-        obs = obs.to(device)
         p, d, v = self.model.forward(obs)
         _, plogprob, pentropy = logits_to_actions(p, paction)
         _, dlogprob, dentropy = logits_to_actions(d, daction)
@@ -129,11 +148,6 @@ class RandomNetworkMapper(PythonMapper):
 @hydra.main(config_path="conf", config_name="config", version_base="1.2")
 def my_app(cfg: DictConfig) -> None:
     args = Args()
-
-    # Determine device: use cuda if available
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    print(f"Using device: {device}")
-
     run_name = (
         f"ppo_{args.env_id}_{cfg.dag.stencil.width}x{cfg.dag.stencil.steps}"
         + datetime.today().strftime("%Y-%m-%d %H:%M:%S")
@@ -149,7 +163,7 @@ def my_app(cfg: DictConfig) -> None:
     torch.backends.cudnn.deterministic = args.torch_deterministic
 
     wandb.init(
-        project="Stencil Adversarial Data Placement General Rand(p)",
+        project="Stencil Adversarial Data Placement General Rand(p) Intermediate Reward",
         name=run_name,
         config={
             "env_id": args.env_id,
@@ -170,33 +184,34 @@ def my_app(cfg: DictConfig) -> None:
         },
     )
 
-    H, SIM = setup_simulator(cfg)
+    H, SIM = setup_simulator(
+        cfg,
+    )
     candidates = SIM.get_mapping_candidates()
     local_graph = SIM.observer.local_graph_features(candidates)
-
-    # Create model and move it to the selected device
-    h = TaskAssignmentNetDeviceOnly(
-        cfg.system.ngpus + 1, args.hidden_dim, local_graph
-    ).to(device)
+    h = TaskAssignmentNetDeviceOnly(cfg.system.ngpus + 1, args.hidden_dim, local_graph)
     optimizer = torch.optim.Adam(h.parameters(), lr=args.learning_rate)
     rnetmap = RandomNetworkMapper(h)
     H.set_python_mapper(rnetmap)
 
     h.apply(init_weights)
-    # h.load_state_dict(...)  # Loading model if needed
-
+    # h.load_state_dict(
+    #     torch.load(
+    #         "/Users/jaeyoung/work/rlgraph_experiments/outputs/ppo_stencil_4x142025-02-12 11:14:03/checkpoint_epoch_2700.pth",
+    #         map_location=torch.device("cpu"),
+    #         weights_only=True,
+    #     )
+    # )
     cfg.mapper.type = "block"
     cfg.mapper.python = True
-    block_times: List[List[int]] = [[] for _ in range(0, 9)]
-    for level in range(0, 9):
-        for i in range(0, 24):
-            cfg.dag.stencil.load_idx = level
-            cfg.dag.stencil.permute_idx = i
-            h_block, sim_block = setup_simulator(cfg)
-            sim_block.run()
-            block_time = sim_block.get_current_time()
-            print(f"Block: {block_time}")
-            block_times[level].append(block_time)
+    cfg.dag.stencil.load_idx = 0
+    cfg.dag.stencil.permute_idx = 0
+    h_block, sim_block = setup_simulator(
+        cfg,
+    )
+    sim_block.run()
+    block_time = sim_block.get_current_time()
+    print(f"Block time: {block_time}")
     Hs: List[List[SimulatorHandler]] = [[] for _ in range(0, 9)]
     Sims: List[List[Simulator]] = [[] for _ in range(0, 9)]
     cfg.env.task_noise = "Lognormal"
@@ -237,7 +252,7 @@ def my_app(cfg: DictConfig) -> None:
                 episode_info.append(record)
 
                 if done:
-                    baseline = block_times[LEVELS][e]
+                    baseline = block_time
 
                     if args.reward == "percent_improvement":
                         record["reward"] = 1 + (baseline - record["time"]) / baseline
@@ -290,8 +305,6 @@ def my_app(cfg: DictConfig) -> None:
             )
 
             for i, batch in enumerate(loader):
-                # Ensure the batch is moved to the correct device
-                batch = batch.to(device)
                 batch: torch_geometric.data.Batch
                 out: Tuple[torch.Tensor, torch.Tensor] = h(batch, batch["tasks"].batch)
                 d, v = out
@@ -371,14 +384,14 @@ def my_app(cfg: DictConfig) -> None:
                 param_norm = param.grad.data.norm(2).item()
                 total_norm += param_norm**2
         total_norm = total_norm**0.5
-        # Save the model every 100 epochs
+        # # Save the model
         if (epoch + 1) % 100 == 0:
             torch.save(
                 h.state_dict(),
                 f"outputs/{run_name}/checkpoint_epoch_{epoch+1}.pth",
             )
 
-    # Save the final pytorch model
+    # save pytorch model
     torch.save(h.state_dict(), f"outputs/{run_name}/model.pth")
     wandb.finish()
 

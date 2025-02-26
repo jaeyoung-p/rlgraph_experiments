@@ -1,4 +1,9 @@
 import matplotlib.pyplot as plt
+from task4feedback.fastsim.interface import SimulatorHandler
+from task4feedback.types import TaskID, TaskInfo
+import networkx as nx
+import matplotlib.pyplot as plt
+import pydot
 
 
 def save_boxplot(
@@ -41,3 +46,21 @@ def save_boxplot(
 
     # Close the plot to free up memory
     plt.close(fig)
+
+
+def draw_graph(
+    SimulatorHandler: SimulatorHandler,
+):
+    tasks = SimulatorHandler.tasks
+    graph = pydot.Dot(graph_type="digraph")
+    for name, task_info in tasks.items():
+        node = pydot.Node(
+            name=str(name),
+            style="filled",
+            fillcolor="white",
+        )
+        graph.add_node(node)
+        for dep_id in task_info.dependencies:
+            edge = pydot.Edge(str(dep_id), str(name))
+            graph.add_edge(edge)
+    graph.write_png("graph.png")

@@ -179,3 +179,4 @@ wandb/
 .DS_Store
 ./*.pth
 *.png
+images/
