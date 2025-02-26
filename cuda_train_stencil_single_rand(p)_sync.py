@@ -56,7 +56,7 @@ class Args:
     vf_coef: float = 0.5
     max_grad_norm: float = 0.5
     num_iterations: int = 25000
-    graphs_per_update: int = 24
+    graphs_per_update: int = 5
     reward: str = "percent_improvement"
     load_model: bool = False
 
