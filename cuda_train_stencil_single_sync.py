@@ -199,8 +199,15 @@ def my_app(cfg: DictConfig) -> None:
     rnetmap = RandomNetworkMapper(h)
     H.set_python_mapper(rnetmap)
 
-    h.apply(init_weights)
+    # h.apply(init_weights)
     # h.load_state_dict(...)  # Loading model if needed
+    h.load_state_dict(
+        torch.load(
+            "./saved_models/cuda_train_stencil_single_sync.pth",
+            map_location=torch.device("cpu"),
+            weights_only=True,
+        )
+    )
 
     hBase, simBase = setup_simulator(
         cfg, python_mapper=rnetmap, randomize_priorities=True
