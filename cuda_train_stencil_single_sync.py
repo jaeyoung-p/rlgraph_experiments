@@ -137,7 +137,7 @@ def my_app(cfg: DictConfig) -> None:
     print("Overriding Hydra configuration manually in the code")
     cfg.env.task_noise = "Lognormal"
     cfg.dag.stencil.width = 4
-    cfg.dag.stencil.steps = 20
+    cfg.dag.stencil.steps = 14
     cfg.dag.stencil.dimension = 2
     cfg.dag.stencil.interior_size = 25000000
     cfg.dag.stencil.boundary_scale = 5
@@ -146,13 +146,13 @@ def my_app(cfg: DictConfig) -> None:
     cfg.dag.stencil.boundary_comm = 1
     cfg.dag.stencil.initial_data_placement = "load"
     cfg.dag.stencil.placement_file_location = "assignments_4.npy"
-    cfg.dag.stencil.load_idx = 8
+    cfg.dag.stencil.load_idx = 1
     cfg.dag.stencil.permute_idx = 0
-    cfg.dag.stencil.reduction = True
+    cfg.dag.stencil.reduction = False
     cfg.dag.stencil.keep_task_dependencies = True
 
     run_name = (
-        f"ppo_{args.env_id}_{cfg.dag.stencil.width}x{cfg.dag.stencil.steps}_"
+        f"category_ppo_{args.env_id}_{cfg.dag.stencil.width}x{cfg.dag.stencil.steps}_"
         + datetime.today().strftime("%Y-%m-%d %H:%M:%S")
     )
     if not os.path.exists("outputs"):
@@ -199,15 +199,14 @@ def my_app(cfg: DictConfig) -> None:
     rnetmap = RandomNetworkMapper(h)
     H.set_python_mapper(rnetmap)
 
-    # h.apply(init_weights)
-    # h.load_state_dict(...)  # Loading model if needed
-    h.load_state_dict(
-        torch.load(
-            "./saved_models/cuda_train_stencil_single_sync.pth",
-            map_location=torch.device("cpu"),
-            weights_only=True,
-        )
-    )
+    h.apply(init_weights)
+    # h.load_state_dict(
+    #     torch.load(
+    #         "./saved_models/cuda_train_stencil_single_sync.pth",
+    #         map_location=torch.device("cpu"),
+    #         weights_only=True,
+    #     )
+    # )
 
     hBase, simBase = setup_simulator(
         cfg, python_mapper=rnetmap, randomize_priorities=True
@@ -222,7 +221,7 @@ def my_app(cfg: DictConfig) -> None:
             obs, immediate_reward, done, terminated, info = sim.step()
             episode_info = []
             device_matrix = np.empty((width, width), dtype=int)
-            while not done:
+            while not done and cfg.dag.stencil.reduction:
                 candidates = sim.get_mapping_candidates()
                 candidates_id: List[TaskID] = [
                     hBase.task_handle.get_task_id(c) for c in candidates
@@ -300,7 +299,35 @@ def my_app(cfg: DictConfig) -> None:
                         commit=False,
                     )
                     break
+            while not done:
+                candidates = sim.get_mapping_candidates()
+                record = {}
+                action_list = RandomNetworkMapper(h).map_tasks(candidates, sim, record)
+                obs, immediate_reward, done, terminated, info = sim.step(action_list)
+                record["time"] = sim.get_current_time()
+                episode_info.append(record)
+                if done:
+                    baseline = cfg.dag.stencil.steps * width * width * 1000 / 4
+                    current_time = sim.get_current_time()
+                    reward = 1 + (baseline - current_time) / baseline
+                    record["returns"] = reward
+                    wandb.log(
+                        {"performace": baseline / current_time},
+                        commit=False,
+                    )
+                    print(
+                        f"{reward:.2f}, {current_time}/{baseline} -> {100.0 * baseline / current_time:.2f}%"
+                    )
+
+            if not cfg.dag.stencil.reduction:
+                with torch.no_grad():
+                    for t in range(len(episode_info)):
+                        episode_info[t]["returns"] = episode_info[-1]["returns"]
+                        episode_info[t]["advantage"] = (
+                            episode_info[-1]["returns"] - episode_info[t]["value"]
+                        )
             batch_info.extend(episode_info)
+
         return batch_info
 
     def batch_update(batch_info, update_epoch, h, optimizer, global_step):
