@@ -52,7 +52,6 @@ class Args:
     max_grad_norm: float = 0.5
     num_iterations: int = 25000
     graphs_per_update: int = 24
-    reward: str = "percent_improvement"
     load_model: bool = False
 
 
@@ -72,11 +71,13 @@ def logits_to_actions(
 
 
 class GreedyNetworkMapper(PythonMapper):
-    def __init__(self, model):
+    def __init__(self, model, device):
         self.model = model
+        self.device = device
 
     def map_tasks(self, candidates: np.ndarray[np.int32], simulator):
         data = simulator.observer.local_graph_features(candidates, k_hop=1)
+        data = data.to(self.device)
         with torch.no_grad():
             d, v = self.model.forward(data)
             # Choose argmax of network output for priority and device assignment
@@ -101,12 +102,13 @@ class GreedyNetworkMapper(PythonMapper):
 
 class RandomNetworkMapper(PythonMapper):
 
-    def __init__(self, model):
+    def __init__(self, model, device):
         self.model = model
+        self.device = device
 
     def map_tasks(self, candidates: np.ndarray[np.int32], simulator, output=None):
         data = simulator.observer.local_graph_features(candidates, k_hop=1)
-
+        data = data.to(self.device)
         with torch.no_grad():
             self.model.eval()
             d, v = self.model.forward(data)
@@ -137,17 +139,44 @@ class RandomNetworkMapper(PythonMapper):
         return action_list
 
     def evaluate(self, obs, daction, paction):
+        obs = obs.to(self.device)
         p, d, v = self.model.forward(obs)
         _, plogprob, pentropy = logits_to_actions(p, paction)
         _, dlogprob, dentropy = logits_to_actions(d, daction)
         return (p, plogprob, pentropy), (d, dlogprob, dentropy), v
 
 
+def get_random_mapper(
+    cfg, args, device, trained_model: Optional[str] = None
+) -> tuple[TaskAssignmentNetDeviceOnly, RandomNetworkMapper]:
+    _, preSim = setup_simulator(
+        cfg,
+    )
+    candidates = preSim.get_mapping_candidates()
+    local_graph = preSim.observer.local_graph_features(candidates)
+    h = TaskAssignmentNetDeviceOnly(
+        cfg.system.ngpus + 1, args.hidden_dim, local_graph
+    ).to(device)
+    optimizer = torch.optim.Adam(h.parameters(), lr=args.learning_rate)
+    rnetmap = RandomNetworkMapper(h, device)
+    if trained_model is not None:
+        h.load_state_dict(
+            torch.load(
+                trained_model,
+                map_location=device,
+                weights_only=True,
+            )
+        )
+    else:
+        h.apply(init_weights)
+    return h, rnetmap, optimizer
+
+
 @hydra.main(config_path="conf", config_name="config", version_base="1.2")
 def my_app(cfg: DictConfig) -> None:
     args = Args()
     run_name = (
-        f"norandom_ppo_{args.env_id}_{cfg.dag.stencil.width}x{cfg.dag.stencil.steps}"
+        f"ppo_{args.env_id}_{cfg.dag.stencil.width}x{cfg.dag.stencil.steps}_"
         + datetime.today().strftime("%Y-%m-%d %H:%M:%S")
     )
     if not os.path.exists("outputs"):
@@ -174,7 +203,6 @@ def my_app(cfg: DictConfig) -> None:
             "max_grad_norm": args.max_grad_norm,
             "num_iterations": args.num_iterations,
             "graphs_per_update": args.graphs_per_update,
-            "reward": args.reward,
             "devices": cfg.system.ngpus,
             "vcus": 1,
             "blocks": cfg.dag.stencil.width,
@@ -182,101 +210,84 @@ def my_app(cfg: DictConfig) -> None:
         },
     )
 
-    H, SIM = setup_simulator(
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+    h, rnetmap, optimizer = get_random_mapper(cfg, args, device)
+
+    baseH, baseSim = setup_simulator(
         cfg,
+        python_mapper=rnetmap,
+        randomize_durations=False,
+        randomize_priorities=False,
+        log=False,
     )
-    candidates = SIM.get_mapping_candidates()
-    local_graph = SIM.observer.local_graph_features(candidates)
-    h = TaskAssignmentNetDeviceOnly(cfg.system.ngpus + 1, args.hidden_dim, local_graph)
-    optimizer = torch.optim.Adam(h.parameters(), lr=args.learning_rate)
-    rnetmap = RandomNetworkMapper(h)
-    H.set_python_mapper(rnetmap)
 
-    h.apply(init_weights)
-    # h.load_state_dict(
-    #     torch.load(
-    #         "/Users/jaeyoung/work/rlgraph_experiments/outputs/ppo_stencil_4x142025-02-12 11:14:03/checkpoint_epoch_2700.pth",
-    #         map_location=torch.device("cpu"),
-    #         weights_only=True,
-    #     )
-    # )
-    cfg.mapper.type = "block"
-    cfg.mapper.python = True
-    block_times = []
-    for i in range(0, 24):
-        cfg.dag.stencil.permute_idx = i
-        h_block, sim_block = setup_simulator(cfg)
-        sim_block.run()
-        block_time = sim_block.get_current_time()
-        print(f"Block: {block_time}")
-        block_times.append(block_time)
-    Hs = []
-    Sims = []
-    for i in range(0, 24):
-        cfg.dag.stencil.permute_idx = i
-        h_block, sim_block = setup_simulator(
-            cfg,
-            python_mapper=rnetmap,
-        )
-        Hs.append(h_block)
-        Sims.append(sim_block)
+    eftH, eftSim = setup_simulator(
+        cfg,
+        force_eft_dequeue=True,
+    )
+    eftSim.run()
+    eftTime = eftSim.get_current_time()
 
-    def collect_batch(episodes, h, global_step=0):
+    blockH, blockSim = setup_simulator(
+        cfg,
+        python_mapper="block",
+    )
+    blockSim.run()
+    blockTime = blockSim.get_current_time()
+    print(f"EFT: {eftTime}, Block: {blockTime}")
+
+    def collect_batch(episodes):
         batch_info = []
+        compareMetrics = {
+            "vsEFT": 0,
+            "vsBlock": 0,
+            "vsOptimal": 0,
+        }
         for e in range(0, episodes):
-            sim = Hs[e].copy(Sims[e])
+            sim = baseH.copy(baseSim)
             done = False
-            # Run baseline
             obs, immediate_reward, done, terminated, info = sim.step()
             episode_info = []
-
+            if not isinstance(sim.pymapper, RandomNetworkMapper):
+                raise ValueError(f"Training with {type(sim.pymapper)} mapper")
             while not done:
                 candidates = sim.get_mapping_candidates()
                 record = {}
-                action_list = RandomNetworkMapper(h).map_tasks(candidates, sim, record)
+                action_list = sim.pymapper.map_tasks(candidates, sim, record)
 
                 obs, immediate_reward, done, terminated, info = sim.step(action_list)
                 record["done"] = done
-                record["time"] = sim.get_current_time()
-                episode_info.append(record)
-
                 if done:
-                    baseline = block_times[e]
-
-                    if args.reward == "percent_improvement":
-                        record["reward"] = 1 + (baseline - record["time"]) / baseline
-                    elif args.reward == "exp":
-                        record["reward"] = (
-                            math.exp((baseline - record["time"]) / baseline) - 1
-                        )
-                    elif args.reward == "better":
-                        if record["time"] < baseline:
-                            record["reward"] = 1
-                        else:
-                            record["reward"] = 0
-
-                    print(f"{record['reward']}, {record['time']}, Block:{baseline}")
-                    break
-
+                    current_time = sim.get_current_time()
+                    optimal = (
+                        (cfg.dag.stencil.width**2) * cfg.dag.stencil.steps * 1000 / 4
+                    )
+                    record["reward"] = 1 + (optimal - current_time) / optimal
+                    print(
+                        f"{record['reward']}, {current_time}, optimal:{optimal}, Block:{blockTime}, EFT:{eftTime}"
+                    )
+                    compareMetrics["vsEFT"] += eftTime / current_time
+                    compareMetrics["vsBlock"] += blockTime / current_time
+                    compareMetrics["vsOptimal"] += optimal / current_time
                 else:
                     record["reward"] = 0
+                episode_info.append(record)
 
             with torch.no_grad():
                 for t in range(len(episode_info)):
-                    episode_info[t]["returns"] = episode_info[-1]["reward"]
+                    episode_info[t]["reward"] = episode_info[-1]["reward"]
                     episode_info[t]["advantage"] = (
                         episode_info[-1]["reward"] - episode_info[t]["value"]
                     )
 
             batch_info.extend(episode_info)
-
+        averageMetrics = {k: v / episodes for k, v in compareMetrics.items()}
+        wandb.log(averageMetrics, commit=False)
         return batch_info
 
-    def batch_update(batch_info, update_epoch, h, optimizer, global_step):
+    def batch_update(batch_info, update_epoch, h, optimizer):
         n_obs = len(batch_info)
-
-        dclipfracs = []
-
         state = []
         total_rewards = 0
         for i in range(n_obs):
@@ -285,16 +296,26 @@ def my_app(cfg: DictConfig) -> None:
             state[i]["value"] = batch_info[i]["value"]
             state[i]["dactions"] = batch_info[i]["dactions"]
             state[i]["advantage"] = batch_info[i]["advantage"]
-            state[i]["returns"] = batch_info[i]["returns"]
-            total_rewards += batch_info[i]["returns"]
-
+            state[i]["reward"] = batch_info[i]["reward"]
+            total_rewards += batch_info[i]["reward"]
+        accum_metrics = {
+            "losses/value_loss": 0.0,
+            "losses/entropy": 0.0,
+            "losses/dentropy": 0.0,
+            "losses/dratio": 0.0,
+            "losses/dpolicy_loss": 0.0,
+            "losses/dold_approx_kl": 0.0,
+            "losses/dapprox_kl": 0.0,
+            "losses/dclipfrac": 0.0,
+        }
+        num_batches = 0
         for k in range(update_epoch):
             loader = torch_geometric.loader.DataLoader(
                 state, batch_size=(n_obs // args.num_minibatches), shuffle=True
             )
 
             for i, batch in enumerate(loader):
-                batch: torch_geometric.data.Batch
+                batch = batch.to(device)
                 out: Tuple[torch.Tensor, torch.Tensor] = h(batch, batch["tasks"].batch)
                 d, v = out
 
@@ -308,9 +329,9 @@ def my_app(cfg: DictConfig) -> None:
                 with torch.no_grad():
                     dold_approx_kl = (-dlogratio).mean()
                     dapprox_kl = ((dratio - 1) - dlogratio).mean()
-                    dclipfracs += [
+                    dclipfrac = (
                         ((dratio - 1.0).abs() > args.clip_coef).float().mean().item()
-                    ]
+                    )
 
                 mb_advantages = batch["advantage"].detach().view(-1)
 
@@ -321,13 +342,13 @@ def my_app(cfg: DictConfig) -> None:
                 dpg_loss = torch.min(dpg_loss1, dpg_loss2).mean()
 
                 newvalue = v.view(-1)
-                v_loss_unclipped = (newvalue - batch["returns"].detach().view(-1)) ** 2
+                v_loss_unclipped = (newvalue - batch["reward"].detach().view(-1)) ** 2
                 v_clipped = batch["value"].detach().view(-1) + torch.clamp(
                     newvalue - batch["value"].detach().view(-1),
                     -args.clip_coef,
                     args.clip_coef,
                 )
-                v_loss_clipped = (v_clipped - batch["returns"].detach().view(-1)) ** 2
+                v_loss_clipped = (v_clipped - batch["reward"].detach().view(-1)) ** 2
                 v_loss_max = torch.max(v_loss_unclipped, v_loss_clipped)
                 v_loss = 0.5 * v_loss_max.mean()
 
@@ -343,28 +364,25 @@ def my_app(cfg: DictConfig) -> None:
                 torch.nn.utils.clip_grad_norm_(h.parameters(), args.max_grad_norm)
                 optimizer.step()
 
-                wandb.log(
-                    {
-                        "losses/value_loss": v_loss.item(),
-                        "losses/entropy": entropy_loss.item(),
-                        "losses/dentropy": dentropy.mean().item(),
-                        "losses/dratio": dratio.mean().item(),
-                        "losses/dpolicy_loss": dpg_loss.item(),
-                        "losses/dold_approx_kl": dold_approx_kl.item(),
-                        "losses/dapprox_kl": dapprox_kl.item(),
-                        "losses/dclipfrac": np.mean(dclipfracs),
-                    },
-                    commit=False,
-                )
-        wandb.log(
-            {"episode_reward": total_rewards / n_obs},
-        )
+                accum_metrics["losses/value_loss"] += v_loss.item()
+                accum_metrics["losses/entropy"] += entropy_loss.item()
+                accum_metrics["losses/dentropy"] += dentropy.mean().item()
+                accum_metrics["losses/dratio"] += dratio.mean().item()
+                accum_metrics["losses/dpolicy_loss"] += dpg_loss.item()
+                accum_metrics["losses/dold_approx_kl"] += dold_approx_kl.item()
+                accum_metrics["losses/dapprox_kl"] += dapprox_kl.item()
+                accum_metrics["losses/dclipfrac"] += dclipfrac
+                num_batches += 1
+
+        avg_metrics = {k: v / num_batches for k, v in accum_metrics.items()}
+        wandb.log(avg_metrics, commit=False)
+        wandb.log({"total_rewards": total_rewards / n_obs})
 
     for epoch in range(args.num_iterations):
         print("Epoch: ", epoch)
 
-        batch_info = collect_batch(args.graphs_per_update, h, global_step=epoch)
-        batch_update(batch_info, args.update_epochs, h, optimizer, global_step=epoch)
+        batch_info = collect_batch(args.graphs_per_update)
+        batch_update(batch_info, args.update_epochs, h, optimizer)
 
         # --- Gradient Monitoring ---
         total_norm = 0.0
