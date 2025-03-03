@@ -135,7 +135,7 @@ def my_app(cfg: DictConfig) -> None:
     print("Overriding Hydra configuration manually in the code")
     cfg.env.task_noise = "Lognormal"
     cfg.dag.stencil.width = 4
-    cfg.dag.stencil.steps = 14
+    cfg.dag.stencil.steps = 100
     cfg.dag.stencil.dimension = 2
     cfg.dag.stencil.interior_size = 25000000
     cfg.dag.stencil.boundary_scale = 5
@@ -146,6 +146,8 @@ def my_app(cfg: DictConfig) -> None:
     cfg.dag.stencil.placement_file_location = "assignments_4.npy"
     cfg.dag.stencil.load_idx = 8
     cfg.dag.stencil.permute_idx = 0
+    cfg.dag.stencil.reduction = True
+    cfg.dag.stencil.keep_task_dependencies = True
 
     run_name = (
         f"ppo_{args.env_id}_{cfg.dag.stencil.width}x{cfg.dag.stencil.steps}"

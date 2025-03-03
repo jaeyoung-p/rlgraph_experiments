@@ -82,8 +82,23 @@ class GreedyNetworkMapper(PythonMapper):
 
 @hydra.main(config_path="conf", config_name="config", version_base="1.2")
 def my_app(cfg: DictConfig) -> None:
+    cfg.env.task_noise = "Lognormal"
+    cfg.dag.stencil.width = 4
+    cfg.dag.stencil.steps = 14
+    cfg.dag.stencil.dimension = 2
+    cfg.dag.stencil.interior_size = 25000000
+    cfg.dag.stencil.boundary_scale = 5
+    cfg.dag.stencil.data_scale = 10
+    cfg.dag.stencil.interior_comm = 1
+    cfg.dag.stencil.boundary_comm = 1
+    cfg.dag.stencil.initial_data_placement = "load"
+    cfg.dag.stencil.placement_file_location = "assignments_4.npy"
+    cfg.dag.stencil.load_idx = 1
+    cfg.dag.stencil.permute_idx = 0
+    cfg.dag.stencil.reduction = False
+    cfg.dag.stencil.keep_task_dependencies = True
     run_mode = "RL"
-    plot_composite = False
+    plot_composite = True
     random.seed(cfg.env.seed)
     np.random.seed(cfg.env.seed)
     torch.manual_seed(cfg.env.seed)
@@ -97,7 +112,7 @@ def my_app(cfg: DictConfig) -> None:
         h.eval()
         h.load_state_dict(
             torch.load(
-                "/Users/jaeyoung/work/rlgraph_experiments/saved_models/stencil_4x4_14steps_all_scenario_all_permute_rand(prior).pth",
+                "./saved_models/checkpoint_epoch_2100_vista.pth",
                 map_location=torch.device("cpu"),
                 weights_only=True,
             )

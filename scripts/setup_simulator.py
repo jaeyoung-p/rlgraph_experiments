@@ -46,7 +46,20 @@ def setup_simulator(
     randomize_priorities=False,
     randomize_durations=False,
     log=False,
+    force_eft_dequeue=False,
 ) -> tuple[SimulatorHandler, Simulator]:
+    """
+    Setup simulator with the given configuration.
+    :param cfg: Configuration object
+    :param tasks: List of tasks
+    :param data: List of data
+    :param devices: List of devices
+    :param python_mapper: Python mapper
+    :param randomize_priorities: Randomize priorities
+    :param randomize_durations: Randomize durations
+    :param log: Log
+    :param force_eft_dequeue: Force EFT dequeue mapper
+    """
     if cfg.env.task_noise == "None" and randomize_durations:
         raise ValueError("Cannot randomize durations without task noise")
     if cfg.env.task_noise == "None" and randomize_priorities:
@@ -66,7 +79,9 @@ def setup_simulator(
     )
     simulator = H.create_simulator()
 
-    if cfg.mapper.type == "block" and python_mapper is None:
+    if (
+        cfg.mapper.type == "block" and python_mapper is None
+    ) or python_mapper == "block":
         print("Using block mapper")
         simulator.initialize(use_data=cfg.env.use_data, use_transition_conditions=False)
     else:
@@ -77,12 +92,18 @@ def setup_simulator(
     if randomize_priorities:
         simulator.randomize_priorities()
 
-    if python_mapper is not None:
+    if force_eft_dequeue:
+        simulator.disable_python_mapper()
+    elif isinstance(python_mapper, str):
+        mapper = setup_python_mapper(cfg, H.task_handle, data, override=python_mapper)
+        simulator.set_python_mapper(mapper)
+        simulator.enable_python_mapper()
+    elif isinstance(python_mapper, PythonMapper):
         simulator.set_python_mapper(python_mapper)
         simulator.enable_python_mapper()
     elif cfg.mapper.python is True:
-        python_mapper = setup_python_mapper(cfg, H.task_handle, data)
-        simulator.set_python_mapper(python_mapper)
+        mapper = setup_python_mapper(cfg, H.task_handle, data)
+        simulator.set_python_mapper(mapper)
         simulator.enable_python_mapper()
     else:
         simulator.disable_python_mapper()

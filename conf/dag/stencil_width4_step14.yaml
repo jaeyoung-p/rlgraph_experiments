@@ -1,0 +1,14 @@
+defaults:
+  - stencil: default
+type: stencil
+params: ${dag.stencil.width}x${dag.stencil.width}_${dag.stencil.steps}_${dag.stencil.initial_data_placement}
+width: 4
+steps: 14
+interior_comm: 1
+boundary_comm: 1
+initial_data_placement: load
+placement_file_location: assignments_4.npy
+load_idx: 0
+permute_idx: 0
+reduction: False
+keep_task_dependencies: True

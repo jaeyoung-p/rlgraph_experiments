@@ -1,11 +1,11 @@
 width: 4
-steps: 1000
+steps: 14
 dimension: 2
 interior_size: 25000000
 boundary_scale: 5
 data_scale: 10
-interior_comm: 1 
-boundary_comm: 1
+interior_comm: None
+boundary_comm: None
 initial_data_placement: load
 placement_file_location: assignments_4.npy
 load_idx: 0

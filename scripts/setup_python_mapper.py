@@ -81,6 +81,8 @@ class StaticPythonMapper:
 
 
 def stencil_rowcyclic(cfg, tasks, data):
+    if cfg.dag.type != "stencil":
+        raise ValueError("Block mapper only works with stencil")
 
     def task_to_device(task_id: TaskID) -> Device:
         blocks = cfg.dag.stencil.width
@@ -100,6 +102,8 @@ def stencil_rowcyclic(cfg, tasks, data):
 
 
 def stencil_block(cfg, tasks, data):
+    if cfg.dag.type != "stencil":
+        raise ValueError("Block mapper only works with stencil")
 
     def task_to_device(task_id: TaskID) -> Device:
         if task_id.taskspace == "S":
@@ -141,7 +145,19 @@ def serial(cfg, tasks, data):
     return idx_to_device
 
 
-def setup_python_mapper(cfg, tasks, data):
+def setup_python_mapper(
+    cfg, tasks, data, override: Optional[str] = None
+) -> PythonMapper:
+    if override is not None:
+        if override == "block":
+            return StaticPythonMapper(stencil_block(cfg, tasks, data))
+        elif override == "rowcyclic":
+            return StaticPythonMapper(stencil_rowcyclic(cfg, tasks, data))
+        elif override == "serial":
+            return StaticPythonMapperInt(serial(cfg, tasks, data))
+        else:
+            raise ValueError("Unknown mapper type: {}".format(override))
+
     if cfg.mapper.type == "block":
         return StaticPythonMapper(stencil_block(cfg, tasks, data))
     elif cfg.mapper.type == "rowcyclic":

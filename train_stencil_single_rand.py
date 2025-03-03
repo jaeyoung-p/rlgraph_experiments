@@ -147,7 +147,7 @@ class RandomNetworkMapper(PythonMapper):
 def my_app(cfg: DictConfig) -> None:
     args = Args()
     run_name = (
-        f"norandom_ppo_{args.env_id}_{cfg.dag.stencil.width}x{cfg.dag.stencil.steps}"
+        f"ppo_{args.env_id}_{cfg.dag.stencil.width}x{cfg.dag.stencil.steps}_"
         + datetime.today().strftime("%Y-%m-%d %H:%M:%S")
     )
     if not os.path.exists("outputs"):
@@ -193,13 +193,6 @@ def my_app(cfg: DictConfig) -> None:
     H.set_python_mapper(rnetmap)
 
     h.apply(init_weights)
-    # h.load_state_dict(
-    #     torch.load(
-    #         "/Users/jaeyoung/work/rlgraph_experiments/outputs/ppo_stencil_4x142025-02-12 11:14:03/checkpoint_epoch_2700.pth",
-    #         map_location=torch.device("cpu"),
-    #         weights_only=True,
-    #     )
-    # )
     cfg.mapper.type = "block"
     cfg.mapper.python = True
     block_times = []
